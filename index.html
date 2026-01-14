@@ -9,30 +9,329 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        /* (keeping your existing styles – only adding for OTA feedback) */
-        .ota-status.debug { color: #7c3aed; font-family: monospace; white-space: pre-wrap; }
+        :root {
+            --bg:        #fafafa;
+            --surface:   #ffffff;
+            --border:    #e2e8f0;
+            --text:      #0f172a;
+            --text-mute: #64748b;
+            --accent:    #3b82f6;
+            --success:   #10b981;
+            --danger:    #ef4444;
+            --shadow-sm: 0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.1);
+            --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
+            --radius:    10px;
+        }
+
+        * { margin:0; padding:0; box-sizing:border-box; }
+
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+
+        .app-header {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 20px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .logo { height: 36px; width: auto; }
+
+        .app-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            letter-spacing: -0.025em;
+        }
+
+        .dashboard {
+            max-width: 1280px;
+            margin: 32px auto;
+            padding: 0 24px;
+            display: grid;
+            grid-template-columns: 240px 1fr;
+            gap: 32px;
+        }
+
+        .sidebar {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            height: fit-content;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .sidebar-header {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--text-mute);
+            margin-bottom: 16px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .device-list { list-style: none; }
+
+        .device-item {
+            padding: 10px 14px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        .device-item:hover { background: #f1f5f9; }
+
+        .device-item.active {
+            background: var(--accent);
+            color: white;
+        }
+
+        .main-panel {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 32px;
+            box-shadow: var(--shadow-md);
+        }
+
+        .connection {
+            font-size: 0.875rem;
+            color: var(--text-mute);
+            margin-bottom: 32px;
+        }
+
+        .connection.connected { color: var(--success); }
+        .connection.disconnected { color: var(--danger); }
+
+        .control-section {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 32px;
+            margin: 40px 0;
+        }
+
+        .buttons {
+            display: flex;
+            gap: 24px;
+        }
+
+        .control-btn {
+            width: 120px;
+            height: 120px;
+            border: none;
+            border-radius: var(--radius);
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: white;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .control-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .btn-on  { background: var(--success); }
+        .btn-off { background: var(--danger); }
+
+        .status-box { text-align: center; }
+
+        .pump-state {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .state-on  { color: var(--success); }
+        .state-off { color: var(--danger); }
+
+        .status-label {
+            font-size: 0.95rem;
+            color: var(--text-mute);
+        }
+
+        /* OTA Section */
+        .ota-section {
+            margin-top: 48px;
+            padding-top: 32px;
+            border-top: 1px solid var(--border);
+        }
+
+        .ota-header {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .ota-form {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            max-width: 500px;
+        }
+
+        .file-input {
+            padding: 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface);
+            cursor: pointer;
+        }
+
+        .upload-btn {
+            padding: 12px 24px;
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: var(--radius);
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .upload-btn:hover { background: #2563eb; }
+        .upload-btn:disabled { background: #94a3b8; cursor: not-allowed; }
+
+        .progress-bar {
+            height: 8px;
+            background: var(--border);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--success);
+            width: 0%;
+            transition: width 0.4s ease;
+        }
+
+        .ota-status {
+            font-size: 0.875rem;
+            min-height: 1.2em;
+        }
+
+        .ota-status.waiting   { color: #d97706; }
+        .ota-status.success   { color: var(--success); }
+        .ota-status.error     { color: var(--danger); }
+        .ota-status.debug     { color: #7c3aed; font-family: monospace; white-space: pre-wrap; word-break: break-all; }
+
+        @media (max-width: 960px) {
+            .dashboard { grid-template-columns: 1fr; }
+            .sidebar { order: -1; }
+            .buttons { flex-direction: column; align-items: center; }
+        }
     </style>
 </head>
 <body>
-    <!-- Your existing HTML structure remains the same -->
-    <!-- ... header, dashboard, sidebar, main-panel, control-section ... -->
+    <header class="app-header">
+        <img src="https://your-domain-or-github/acres-of-ice-logo.png" alt="Acres of Ice" class="logo">
+        <div class="app-title">Pump Controller</div>
+    </header>
 
-    <section class="ota-section">
-        <div class="ota-header">Firmware Update (OTA)</div>
-        <div class="ota-form">
-            <input type="file" id="firmwareFile" accept=".bin" class="file-input">
-            <button id="uploadBtn" class="upload-btn" disabled>Start OTA Upload</button>
-            <div class="progress-bar">
-                <div id="progressFill" class="progress-fill"></div>
-            </div>
-            <div id="otaStatus" class="ota-status"></div>
-        </div>
-    </section>
+    <div class="dashboard">
+        <aside class="sidebar">
+            <div class="sidebar-header">Devices</div>
+            <ul class="device-list" id="deviceList"></ul>
+        </aside>
 
-    <!-- Rest of body -->
+        <main class="main-panel">
+            <div class="connection" id="connectionStatus">Connecting…</div>
+
+            <section class="control-section">
+                <div class="buttons">
+                    <button class="control-btn btn-on" id="onBtn">ON</button>
+                    <button class="control-btn btn-off" id="offBtn">OFF</button>
+                </div>
+
+                <div class="status-box">
+                    <div class="pump-state" id="pumpStatus">Pump OFF</div>
+                    <div class="status-label">Current Pump Status</div>
+                </div>
+            </section>
+
+            <section class="ota-section">
+                <div class="ota-header">Firmware Update (OTA)</div>
+                <div class="ota-form">
+                    <input type="file" id="firmwareFile" accept=".bin" class="file-input">
+                    <button id="uploadBtn" class="upload-btn" disabled>Start OTA Upload</button>
+                    <div class="progress-bar">
+                        <div id="progressFill" class="progress-fill"></div>
+                    </div>
+                    <div id="otaStatus" class="ota-status"></div>
+                </div>
+            </section>
+        </main>
+    </div>
 
     <script>
-        // ... (keep your existing variables, updateDeviceList, selectDevice, updatePumpStatus, connect, pump buttons)
+        const brokerUrl = 'wss://broker.hivemq.com:8884/mqtt';
+        const prefix = 'mg_mqtt_dashboard';
+        const options = {
+            clean: true,
+            connectTimeout: 5000,
+            clientId: 'pump-controller-' + Math.random().toString(16).substr(2, 8),
+        };
+
+        let client = null;
+        let selectedDevice = 'Shey';
+        let devices = {};
+        let otaInProgress = false;
+        const chunkSize = 4096;
+
+        // ──────────────── Device & Pump logic ────────────────
+        function updateDeviceList() {
+            const list = document.getElementById('deviceList');
+            list.innerHTML = '';
+            Object.keys(devices).forEach(id => {
+                const li = document.createElement('li');
+                li.className = 'device-item' + (id === selectedDevice ? ' active' : '');
+                li.textContent = id;
+                li.onclick = () => selectDevice(id);
+                list.appendChild(li);
+            });
+        }
+
+        function selectDevice(id) {
+            selectedDevice = id;
+            updateDeviceList();
+            updatePumpStatus();
+        }
+
+        function updatePumpStatus() {
+            const el = document.getElementById('pumpStatus');
+            if (devices[selectedDevice]) {
+                const isOn = devices[selectedDevice].pump_status;
+                el.textContent = `Pump ${isOn ? 'ON' : 'OFF'}`;
+                el.className = 'pump-state ' + (isOn ? 'state-on' : 'state-off');
+            } else {
+                el.textContent = 'Pump OFF';
+                el.className = 'pump-state state-off';
+            }
+        }
+
+        function setOtaStatus(msg, type = '') {
+            const el = document.getElementById('otaStatus');
+            el.textContent = msg;
+            el.className = 'ota-status ' + type;
+        }
+
+        function updateProgress(percent) {
+            document.getElementById('progressFill').style.width = `${percent}%`;
+        }
 
         async function uploadFirmware(file) {
             if (otaInProgress) return;
@@ -42,8 +341,7 @@
             }
 
             otaInProgress = true;
-            const uploadBtn = document.getElementById('uploadBtn');
-            uploadBtn.disabled = true;
+            document.getElementById('uploadBtn').disabled = true;
             setOtaStatus('Starting OTA upload...', 'waiting');
             updateProgress(0);
 
@@ -55,7 +353,11 @@
             try {
                 while (offset < totalSize) {
                     const chunk = file.slice(offset, offset + chunkSize);
-                    const base64 = await chunkToBase64(chunk);
+                    const base64 = await new Promise(r => {
+                        const reader = new FileReader();
+                        reader.onload = () => r(reader.result.split(',')[1]);
+                        reader.readAsDataURL(chunk);
+                    });
 
                     const payload = JSON.stringify({
                         method: "ota.upload",
@@ -70,89 +372,143 @@
                     updateProgress((offset / totalSize) * 100);
                 }
 
-                setOtaStatus('Upload complete. Device should reboot and apply update.', 'success');
+                setOtaStatus('Upload finished. Device should reboot and apply firmware.', 'success');
             } catch (err) {
-                console.error('OTA failed:', err);
+                console.error('OTA error:', err);
                 setOtaStatus(`Upload failed: ${err.message}`, 'error');
             } finally {
                 otaInProgress = false;
-                uploadBtn.disabled = false;
+                document.getElementById('uploadBtn').disabled = false;
                 updateProgress(0);
             }
-        }
-
-        function chunkToBase64(chunk) {
-            return new Promise(resolve => {
-                const reader = new FileReader();
-                reader.onload = () => resolve(reader.result.split(',')[1]);
-                reader.readAsDataURL(chunk);
-            });
         }
 
         function sendChunkAndWaitForAck(rxTopic, txTopic, payload, currentOffset) {
             return new Promise((resolve, reject) => {
                 let responded = false;
-                const timeoutMs = 40000; // 40 seconds – SIM can be very slow
+                const timeoutMs = 40000;
 
                 const timeoutId = setTimeout(() => {
                     if (!responded) {
                         responded = true;
-                        client.off('message', messageHandler);
+                        client.off('message', handler);
                         reject(new Error(`No valid response after ${timeoutMs/1000}s (offset ${currentOffset})`));
                     }
                 }, timeoutMs);
 
-                const messageHandler = (topic, message) => {
+                const handler = (topic, message) => {
                     if (topic !== txTopic) return;
 
-                    const rawText = message.toString().trim();
-                    console.log(`[TX RAW] ${rawText}`);
+                    const raw = message.toString().trim();
+                    console.log(`[TX RAW received] ${raw}`);
 
                     responded = true;
                     clearTimeout(timeoutId);
-                    client.off('message', messageHandler);
+                    client.off('message', handler);
 
-                    setOtaStatus(`Received response: ${rawText.slice(0, 100)}...`, 'debug');
+                    setOtaStatus(`Received on tx: ${raw.slice(0, 120)}${raw.length > 120 ? '...' : ''}`, 'debug');
 
                     try {
-                        const json = JSON.parse(rawText);
+                        const json = JSON.parse(raw);
+                        console.log('[TX PARSED]', json);
+
                         if (json.result && json.result.status === 'ok') {
                             setOtaStatus(`Chunk accepted (offset ${currentOffset})`, 'success');
                             resolve();
                         } else if (json.error) {
-                            reject(new Error(json.error.message || 'Device error'));
+                            reject(new Error(json.error.message || 'Device reported error'));
                         } else {
-                            reject(new Error('Response missing "result" or "ok"'));
+                            reject(new Error('Response missing expected "result" or "ok" field'));
                         }
-                    } catch (parseErr) {
-                        console.warn('Parse failed – raw:', rawText);
-                        setOtaStatus(`Invalid response format: ${rawText.slice(0, 80)}...`, 'error');
-                        // Do NOT reject here – allow timeout to handle
+                    } catch (e) {
+                        console.warn('Failed to parse tx message as JSON:', raw);
+                        // Do not reject here — wait for timeout if needed
+                        setOtaStatus(`Invalid/non-JSON response received: ${raw.slice(0, 80)}...`, 'error');
                     }
                 };
 
-                client.on('message', messageHandler);
+                client.on('message', handler);
 
+                console.log(`Publishing OTA chunk (offset ${currentOffset})`);
                 client.publish(rxTopic, payload, { qos: 1 }, (err) => {
                     if (err) {
                         clearTimeout(timeoutId);
-                        client.off('message', messageHandler);
+                        client.off('message', handler);
                         reject(new Error('Publish failed: ' + err.message));
                     }
                 });
             });
         }
 
-        function setOtaStatus(msg, type = '') {
-            document.getElementById('otaStatus').textContent = msg;
-            document.getElementById('otaStatus').className = 'ota-status ' + type;
+        // ──────────────── MQTT Connection ────────────────
+        function connect() {
+            client = mqtt.connect(brokerUrl, options);
+
+            client.on('connect', () => {
+                document.getElementById('connectionStatus').textContent = 'Connected';
+                document.getElementById('connectionStatus').className = 'connection connected';
+
+                client.subscribe(`${prefix}/+/status`);
+                client.subscribe(`${prefix}/+/tx`);
+            });
+
+            client.on('error', (err) => {
+                document.getElementById('connectionStatus').textContent = `Failed: ${err.message}`;
+                document.getElementById('connectionStatus').className = 'connection disconnected';
+            });
+
+            client.on('close', () => {
+                document.getElementById('connectionStatus').textContent = 'Disconnected';
+                document.getElementById('connectionStatus').className = 'connection disconnected';
+            });
+
+            client.on('message', (topic, message) => {
+                const parts = topic.split('/');
+                if (parts.length === 3 && parts[2] === 'status') {
+                    const id = parts[1];
+                    try {
+                        const data = JSON.parse(message.toString());
+                        if (data.method === 'status.notify' && data.params?.status === 'online') {
+                            devices[id] = { pump_status: !!data.params.pump_status };
+                            updateDeviceList();
+                            if (id === selectedDevice) updatePumpStatus();
+                        } else {
+                            delete devices[id];
+                            updateDeviceList();
+                            if (id === selectedDevice) updatePumpStatus();
+                        }
+                    } catch {}
+                }
+                // tx messages handled in OTA promise
+            });
         }
 
-        function updateProgress(percent) {
-            document.getElementById('progressFill').style.width = `${percent}%`;
-        }
+        document.getElementById('onBtn').addEventListener('click', () => {
+            if (client?.connected && selectedDevice) {
+                client.publish(`${prefix}/${selectedDevice}/rx`, 'PUMP ON', { qos: 1 });
+            } else {
+                alert('Not connected or no device selected');
+            }
+        });
 
-        // ... rest of your script (file change listener, upload button click, connect())
+        document.getElementById('offBtn').addEventListener('click', () => {
+            if (client?.connected && selectedDevice) {
+                client.publish(`${prefix}/${selectedDevice}/rx`, 'PUMP OFF', { qos: 1 });
+            } else {
+                alert('Not connected or no device selected');
+            }
+        });
+
+        document.getElementById('firmwareFile').addEventListener('change', (e) => {
+            document.getElementById('uploadBtn').disabled = !e.target.files[0];
+        });
+
+        document.getElementById('uploadBtn').addEventListener('click', () => {
+            const file = document.getElementById('firmwareFile').files[0];
+            if (file) uploadFirmware(file);
+        });
+
+        connect();
     </script>
 </body>
 </html>
