@@ -176,6 +176,77 @@
             color: var(--text-mute);
         }
 
+        /* OTA Section */
+        .ota-section {
+            margin-top: 48px;
+            padding-top: 32px;
+            border-top: 1px solid var(--border);
+        }
+
+        .ota-header {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .ota-form {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .file-input {
+            padding: 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface);
+            cursor: pointer;
+        }
+
+        .upload-btn {
+            padding: 12px 24px;
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: var(--radius);
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .upload-btn:hover {
+            background: #2563eb;
+        }
+
+        .upload-btn:disabled {
+            background: #94a3b8;
+            cursor: not-allowed;
+        }
+
+        .progress-bar {
+            height: 6px;
+            background: var(--border);
+            border-radius: 3px;
+            margin-top: 8px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--success);
+            width: 0;
+            transition: width 0.3s ease;
+            border-radius: 3px;
+        }
+
+        .ota-status {
+            font-size: 0.875rem;
+            color: var(--text-mute);
+            margin-top: 8px;
+        }
+
+        .ota-status.success { color: var(--success); }
+        .ota-status.error { color: var(--danger); }
+
         @media (max-width: 960px) {
             .dashboard {
                 grid-template-columns: 1fr;
@@ -216,14 +287,22 @@
                     <div class="status-label">Current Pump Status</div>
                 </div>
             </section>
+
+            <section class="ota-section">
+                <div class="ota-header">Firmware Update (OTA)</div>
+                <div class="ota-form">
+                    <input type="file" id="firmwareFile" accept=".bin" class="file-input">
+                    <button id="uploadBtn" class="upload-btn" disabled>Upload Firmware</button>
+                    <div class="progress-bar">
+                        <div id="progressFill" class="progress-fill"></div>
+                    </div>
+                    <div id="otaStatus" class="ota-status"></div>
+                </div>
+            </section>
         </main>
     </div>
 
     <script>
-        // ────────────────────────────────────────────────
-        // MQTT logic (unchanged from previous working version)
-        // ────────────────────────────────────────────────
-
         const brokerUrl = 'wss://broker.hivemq.com:8884/mqtt';
         const prefix = 'mg_mqtt_dashboard';
         const options = {
@@ -235,6 +314,8 @@
         let client = null;
         let selectedDevice = 'Shey';
         let devices = {};
+        let otaInProgress = false;
+        const chunkSize = 4096;  // 4KB chunks for OTA
 
         function updateDeviceList() {
             const list = document.getElementById('deviceList');
@@ -266,6 +347,86 @@
             }
         }
 
+        function setOtaStatus(message, className = '') {
+            const statusEl = document.getElementById('otaStatus');
+            statusEl.textContent = message;
+            statusEl.className = 'ota-status ' + className;
+        }
+
+        function updateProgress(percent) {
+            document.getElementById('progressFill').style.width = `${percent}%`;
+        }
+
+        async function uploadFirmware(file) {
+            if (otaInProgress || !client?.connected || !selectedDevice) {
+                setOtaStatus('Cannot start upload: Not connected or no device selected', 'error');
+                return;
+            }
+
+            otaInProgress = true;
+            document.getElementById('uploadBtn').disabled = true;
+            setOtaStatus('Uploading...');
+            updateProgress(0);
+
+            const rxTopic = `${prefix}/${selectedDevice}/rx`;
+            const txTopic = `${prefix}/${selectedDevice}/tx`;
+            const total = file.size;
+
+            try {
+                const reader = new FileReader();
+                let offset = 0;
+
+                while (offset < total) {
+                    const chunk = file.slice(offset, offset + chunkSize);
+                    const base64Chunk = await new Promise(resolve => {
+                        reader.onload = () => resolve(reader.result.split(',')[1]);  // Get base64 without prefix
+                        reader.readAsDataURL(chunk);
+                    });
+
+                    const payload = JSON.stringify({
+                        method: 'ota.upload',
+                        params: {
+                            offset: offset,
+                            total: total,
+                            chunk: base64Chunk
+                        }
+                    });
+
+                    await new Promise((resolve, reject) => {
+                        const sub = client.subscribe(txTopic, () => {});
+                        client.publish(rxTopic, payload, { qos: 1 });
+
+                        const handler = (topic, msg) => {
+                            if (topic === txTopic) {
+                                const response = JSON.parse(msg.toString());
+                                if (response.error) {
+                                    reject(new Error(response.error.message || 'OTA error'));
+                                } else {
+                                    resolve();
+                                }
+                                client.off('message', handler);
+                                if (sub) client.unsubscribe(txTopic);
+                            }
+                        };
+
+                        client.on('message', handler);
+
+                        setTimeout(() => reject(new Error('Timeout waiting for response')), 15000);
+                    });
+
+                    offset += chunk.size;
+                    updateProgress((offset / total) * 100);
+                }
+
+                setOtaStatus('Upload complete. Device rebooting...', 'success');
+            } catch (err) {
+                setOtaStatus(`Error: ${err.message}`, 'error');
+            } finally {
+                otaInProgress = false;
+                document.getElementById('uploadBtn').disabled = false;
+            }
+        }
+
         function connect() {
             client = mqtt.connect(brokerUrl, options);
 
@@ -274,6 +435,7 @@
                 document.getElementById('connectionStatus').className = 'connection connected';
 
                 client.subscribe(`${prefix}/+/status`, () => {});
+                client.subscribe(`${prefix}/+/tx`, () => {});  // For OTA responses
             });
 
             client.on('error', (err) => {
@@ -302,6 +464,9 @@
                             if (id === selectedDevice) updatePumpStatus();
                         }
                     } catch {}
+                } else if (parts.length === 3 && parts[2] === 'tx') {
+                    // OTA responses handled in upload function
+                    console.log('TX response:', message.toString());
                 }
             });
         }
@@ -319,6 +484,17 @@
                 client.publish(`${prefix}/${selectedDevice}/rx`, 'PUMP OFF', { qos: 1 });
             } else {
                 alert('Not connected or no device selected');
+            }
+        });
+
+        document.getElementById('firmwareFile').addEventListener('change', (e) => {
+            document.getElementById('uploadBtn').disabled = !e.target.files[0];
+        });
+
+        document.getElementById('uploadBtn').addEventListener('click', () => {
+            const file = document.getElementById('firmwareFile').files[0];
+            if (file) {
+                uploadFirmware(file);
             }
         });
 
