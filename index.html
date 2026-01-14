@@ -9,119 +9,168 @@
         body {
             font-family: Arial, sans-serif;
             text-align: center;
-            padding: 50px;
-            background-color: #f0f0f0;
+            padding: 30px;
+            background-color: #f4f4f4;
+            max-width: 600px;
+            margin: 0 auto;
         }
         h1 { color: #333; }
-        .status { font-size: 1.2em; margin: 20px 0; }
-        button {
-            padding: 15px 30px;
-            font-size: 1.2em;
-            margin: 15px;
-            cursor: pointer;
-            border: none;
-            border-radius: 8px;
-            color: white;
+        .section { margin: 20px 0; padding: 15px; background: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        input, button {
+            padding: 10px;
+            margin: 8px;
+            font-size: 1em;
+            border-radius: 5px;
+            border: 1px solid #ccc;
         }
-        #onBtn { background-color: #4CAF50; }
-        #offBtn { background-color: #f44336; }
-        #connectionStatus { font-weight: bold; }
+        button {
+            cursor: pointer;
+            color: white;
+            border: none;
+        }
+        #connectBtn { background: #2196F3; }
+        #onBtn { background: #4CAF50; }
+        #offBtn { background: #f44336; }
+        #status { font-weight: bold; font-size: 1.1em; }
+        #pumpStatus { font-size: 1.4em; }
+        #log { margin-top: 20px; text-align: left; background: #222; color: #0f0; padding: 10px; height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.9em; }
     </style>
 </head>
 <body>
     <h1>Pump Control - Shey Device</h1>
-    <p id="connectionStatus">Connecting to MQTT broker...</p>
-    <p class="status">Pump Status: <span id="pumpStatus">Unknown</span></p>
-    <button id="onBtn">Turn Pump ON</button>
-    <button id="offBtn">Turn Pump OFF</button>
+
+    <div class="section">
+        <label>Broker URL (wss required for HTTPS page):</label><br>
+        <input type="text" id="brokerUrl" value="wss://broker.hivemq.com:8884/mqtt" style="width: 90%;">
+        <br>
+        <button id="connectBtn">Connect to Broker</button>
+        <p id="status">Status: Disconnected</p>
+    </div>
+
+    <div class="section">
+        <p>Pump Status: <span id="pumpStatus">Unknown</span></p>
+        <button id="onBtn">Turn Pump ON</button>
+        <button id="offBtn">Turn Pump OFF</button>
+    </div>
+
+    <div class="section" id="logContainer">
+        <strong>Console Log:</strong>
+        <div id="log"></div>
+    </div>
 
     <script>
-        // Use HiveMQ public broker WebSocket endpoint (same broker as your device & app)
-        const brokerUrl = 'wss://broker.hivemq.com:8884/mqtt';  // Plain WS – matches your non-SSL setup
+        let client = null;
 
-        const options = {
-            clean: true,
-            connectTimeout: 5000,
-            clientId: 'web-dashboard-' + Math.random().toString(16).substr(2, 8),  // Unique client ID
-            // No username/password needed for public broker
-        };
-
-        // Your exact topics from code + screenshots
         const prefix = 'mg_mqtt_dashboard';
         const device = 'Shey';
-        const rxTopic    = `${prefix}/${device}/rx`;     // Publish commands here
-        const statusTopic = `${prefix}/${device}/status`; // Subscribe for retained status
-        const txTopic     = `${prefix}/${device}/tx`;     // Optional: responses
+        const rxTopic    = `${prefix}/${device}/rx`;
+        const statusTopic = `${prefix}/${device}/status`;
+        const txTopic     = `${prefix}/${device}/tx`;
 
-        const client = mqtt.connect(brokerUrl, options);
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            logDiv.innerHTML += message + '<br>';
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
 
-        client.on('connect', () => {
-            document.getElementById('connectionStatus').innerText = 'Connected ✓';
-            document.getElementById('connectionStatus').style.color = 'green';
-
-            // Subscribe to status (retained message will show current pump state immediately)
-            client.subscribe(statusTopic, (err) => {
-                if (err) console.error('Subscribe error:', err);
-                else console.log('Subscribed to status');
-            });
-
-            // Optional: also subscribe to tx if you want to see RPC responses
-            client.subscribe(txTopic, (err) => {
-                if (!err) console.log('Subscribed to tx');
-            });
-        });
-
-        client.on('error', (err) => {
-            console.error('MQTT Error:', err);
-            document.getElementById('connectionStatus').innerText = 'Connection failed: ' + err.message;
-            document.getElementById('connectionStatus').style.color = 'red';
-        });
-
-        client.on('close', () => {
-            document.getElementById('connectionStatus').innerText = 'Disconnected';
-            document.getElementById('connectionStatus').style.color = 'orange';
-        });
-
-        client.on('message', (topic, message) => {
-            const msg = message.toString();
-            console.log(`Message on ${topic}: ${msg}`);
-
-            if (topic === statusTopic) {
-                try {
-                    const data = JSON.parse(msg);
-                    if (data.method === 'status.notify' && data.params && 'pump_status' in data.params) {
-                        const isOn = data.params.pump_status === true;
-                        document.getElementById('pumpStatus').innerText = isOn ? 'ON' : 'OFF';
-                        document.getElementById('pumpStatus').style.color = isOn ? 'green' : 'red';
-                    }
-                } catch (e) {
-                    console.error('JSON parse error:', e);
-                }
+        function connect() {
+            const brokerUrl = document.getElementById('brokerUrl').value.trim();
+            if (!brokerUrl) {
+                alert('Please enter a broker URL');
+                return;
             }
-        });
 
-        // Send commands
-        document.getElementById('onBtn').addEventListener('click', () => {
-            if (client.connected) {
-                client.publish(rxTopic, 'PUMP ON', { qos: 1 }, (err) => {
-                    if (err) alert('Failed to send ON');
-                    else console.log('Sent: PUMP ON');
+            if (client) {
+                client.end();
+                client = null;
+            }
+
+            document.getElementById('status').innerText = 'Status: Connecting...';
+            document.getElementById('status').style.color = 'blue';
+            log(`Attempting connection to: ${brokerUrl}`);
+
+            const options = {
+                clean: true,
+                connectTimeout: 8000,
+                clientId: 'web-pump-dashboard-' + Math.random().toString(16).substr(2, 8),
+                reconnectPeriod: 5000,     // auto-reconnect every 5s
+            };
+
+            client = mqtt.connect(brokerUrl, options);
+
+            client.on('connect', () => {
+                document.getElementById('status').innerText = 'Status: Connected ✓';
+                document.getElementById('status').style.color = 'green';
+                log('CONNECTED successfully');
+
+                client.subscribe(statusTopic, (err) => {
+                    if (err) {
+                        log('Subscribe error (status): ' + err);
+                    } else {
+                        log(`Subscribed to ${statusTopic} (retained status should arrive)`);
+                    }
                 });
+
+                client.subscribe(txTopic, (err) => {
+                    if (!err) log(`Subscribed to ${txTopic}`);
+                });
+            });
+
+            client.on('error', (err) => {
+                log('Connection ERROR: ' + (err.message || err));
+                document.getElementById('status').innerText = 'Status: Connection failed';
+                document.getElementById('status').style.color = 'red';
+            });
+
+            client.on('close', () => {
+                log('Connection closed / disconnected');
+                document.getElementById('status').innerText = 'Status: Disconnected';
+                document.getElementById('status').style.color = 'orange';
+            });
+
+            client.on('message', (topic, message) => {
+                const msg = message.toString();
+                log(`← ${topic}: ${msg}`);
+
+                if (topic === statusTopic) {
+                    try {
+                        const data = JSON.parse(msg);
+                        if (data.method === 'status.notify' && data.params && 'pump_status' in data.params) {
+                            const isOn = data.params.pump_status === true;
+                            document.getElementById('pumpStatus').innerText = isOn ? 'ON' : 'OFF';
+                            document.getElementById('pumpStatus').style.color = isOn ? 'green' : 'red';
+                            log(`Pump status updated: ${isOn ? 'ON' : 'OFF'}`);
+                        }
+                    } catch (e) {
+                        log('JSON parse error: ' + e);
+                    }
+                }
+            });
+        }
+
+        // Button handlers
+        document.getElementById('connectBtn').addEventListener('click', connect);
+
+        document.getElementById('onBtn').addEventListener('click', () => {
+            if (client && client.connected) {
+                client.publish(rxTopic, 'PUMP ON', { qos: 1 });
+                log('→ Sent: PUMP ON');
             } else {
-                alert('Not connected yet');
+                alert('Not connected to broker');
             }
         });
 
         document.getElementById('offBtn').addEventListener('click', () => {
-            if (client.connected) {
-                client.publish(rxTopic, 'PUMP OFF', { qos: 1 }, (err) => {
-                    if (err) alert('Failed to send OFF');
-                    else console.log('Sent: PUMP OFF');
-                });
+            if (client && client.connected) {
+                client.publish(rxTopic, 'PUMP OFF', { qos: 1 });
+                log('→ Sent: PUMP OFF');
             } else {
-                alert('Not connected yet');
+                alert('Not connected to broker');
             }
         });
+
+        // Optional: auto-connect on load (comment out if you prefer manual)
+        // connect();
     </script>
 </body>
 </html>
