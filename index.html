@@ -12,124 +12,114 @@
             padding: 50px;
             background-color: #f0f0f0;
         }
-        h1 {
-            color: #333;
-        }
-        .status {
-            font-size: 1.2em;
-            margin: 20px 0;
-        }
+        h1 { color: #333; }
+        .status { font-size: 1.2em; margin: 20px 0; }
         button {
-            padding: 10px 20px;
-            font-size: 1em;
-            margin: 10px;
+            padding: 15px 30px;
+            font-size: 1.2em;
+            margin: 15px;
             cursor: pointer;
             border: none;
-            border-radius: 5px;
+            border-radius: 8px;
             color: white;
         }
-        #onBtn {
-            background-color: #4CAF50; /* Green */
-        }
-        #offBtn {
-            background-color: #f44336; /* Red */
-        }
-        #connectionStatus {
-            color: #888;
-        }
+        #onBtn { background-color: #4CAF50; }
+        #offBtn { background-color: #f44336; }
+        #connectionStatus { font-weight: bold; }
     </style>
 </head>
 <body>
-    <h1>Pump Control Dashboard</h1>
-    <p id="connectionStatus">Connecting to MQTT...</p>
+    <h1>Pump Control - Shey Device</h1>
+    <p id="connectionStatus">Connecting to MQTT broker...</p>
     <p class="status">Pump Status: <span id="pumpStatus">Unknown</span></p>
     <button id="onBtn">Turn Pump ON</button>
     <button id="offBtn">Turn Pump OFF</button>
 
     <script>
-        // MQTT Broker details (assuming Mongoose Cloud broker - adjust if needed)
-        const brokerUrl = 'wss://broker.hivemq.com:8884/mqtt'; // Use wss for secure connection
+        // Use HiveMQ public broker WebSocket endpoint (same broker as your device & app)
+        const brokerUrl = 'ws://broker.hivemq.com:8000/mqtt';  // Plain WS – matches your non-SSL setup
+
         const options = {
-            clean: true, // Clean session
-            connectTimeout: 4000,
-            // No username/password as per your device code
+            clean: true,
+            connectTimeout: 5000,
+            clientId: 'web-dashboard-' + Math.random().toString(16).substr(2, 8),  // Unique client ID
+            // No username/password needed for public broker
         };
 
-        // Topics based on your code
-        const deviceId = 'Shey';
-        const topicPrefix = 'mg_mqtt_dashboard';
-        const rxTopic = `${topicPrefix}/${deviceId}/rx`;
-        const statusTopic = `${topicPrefix}/${deviceId}/status`;
-        const txTopic = `${topicPrefix}/${deviceId}/tx`; // Optional, for responses
+        // Your exact topics from code + screenshots
+        const prefix = 'mg_mqtt_dashboard';
+        const device = 'Shey';
+        const rxTopic    = `${prefix}/${device}/rx`;     // Publish commands here
+        const statusTopic = `${prefix}/${device}/status`; // Subscribe for retained status
+        const txTopic     = `${prefix}/${device}/tx`;     // Optional: responses
 
-        // Connect to MQTT
         const client = mqtt.connect(brokerUrl, options);
 
         client.on('connect', () => {
-            document.getElementById('connectionStatus').innerText = 'Connected to MQTT broker';
+            document.getElementById('connectionStatus').innerText = 'Connected ✓';
             document.getElementById('connectionStatus').style.color = 'green';
 
-            // Subscribe to status topic to get updates
+            // Subscribe to status (retained message will show current pump state immediately)
             client.subscribe(statusTopic, (err) => {
-                if (!err) {
-                    console.log(`Subscribed to ${statusTopic}`);
-                }
+                if (err) console.error('Subscribe error:', err);
+                else console.log('Subscribed to status');
             });
 
-            // Optionally subscribe to tx for responses
+            // Optional: also subscribe to tx if you want to see RPC responses
             client.subscribe(txTopic, (err) => {
-                if (!err) {
-                    console.log(`Subscribed to ${txTopic}`);
-                }
+                if (!err) console.log('Subscribed to tx');
             });
         });
 
         client.on('error', (err) => {
-            document.getElementById('connectionStatus').innerText = `Connection error: ${err}`;
+            console.error('MQTT Error:', err);
+            document.getElementById('connectionStatus').innerText = 'Connection failed: ' + err.message;
             document.getElementById('connectionStatus').style.color = 'red';
         });
 
+        client.on('close', () => {
+            document.getElementById('connectionStatus').innerText = 'Disconnected';
+            document.getElementById('connectionStatus').style.color = 'orange';
+        });
+
         client.on('message', (topic, message) => {
-            console.log(`Received message on ${topic}: ${message.toString()}`);
+            const msg = message.toString();
+            console.log(`Message on ${topic}: ${msg}`);
+
             if (topic === statusTopic) {
                 try {
-                    const data = JSON.parse(message.toString());
-                    if (data.method === 'status.notify' && data.params) {
-                        const pumpOn = data.params.pump_status === true || data.params.pump_status === 'true';
-                        document.getElementById('pumpStatus').innerText = pumpOn ? 'ON' : 'OFF';
-                        document.getElementById('pumpStatus').style.color = pumpOn ? 'green' : 'red';
+                    const data = JSON.parse(msg);
+                    if (data.method === 'status.notify' && data.params && 'pump_status' in data.params) {
+                        const isOn = data.params.pump_status === true;
+                        document.getElementById('pumpStatus').innerText = isOn ? 'ON' : 'OFF';
+                        document.getElementById('pumpStatus').style.color = isOn ? 'green' : 'red';
                     }
                 } catch (e) {
-                    console.error('Failed to parse status message:', e);
+                    console.error('JSON parse error:', e);
                 }
-            } else if (topic === txTopic) {
-                // Handle responses if needed (e.g., show in console or alert)
-                console.log('Response:', message.toString());
             }
         });
 
-        // Button event listeners
+        // Send commands
         document.getElementById('onBtn').addEventListener('click', () => {
             if (client.connected) {
                 client.publish(rxTopic, 'PUMP ON', { qos: 1 }, (err) => {
-                    if (!err) {
-                        console.log('Published PUMP ON');
-                    }
+                    if (err) alert('Failed to send ON');
+                    else console.log('Sent: PUMP ON');
                 });
             } else {
-                alert('Not connected to MQTT broker');
+                alert('Not connected yet');
             }
         });
 
         document.getElementById('offBtn').addEventListener('click', () => {
             if (client.connected) {
                 client.publish(rxTopic, 'PUMP OFF', { qos: 1 }, (err) => {
-                    if (!err) {
-                        console.log('Published PUMP OFF');
-                    }
+                    if (err) alert('Failed to send OFF');
+                    else console.log('Sent: PUMP OFF');
                 });
             } else {
-                alert('Not connected to MQTT broker');
+                alert('Not connected yet');
             }
         });
     </script>
