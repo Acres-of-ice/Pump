@@ -392,27 +392,38 @@
                         }
                     });
 
-                    await new Promise((resolve, reject) => {
-                        const sub = client.subscribe(txTopic, () => {});
-                        client.publish(rxTopic, payload, { qos: 1 });
+await new Promise((resolve, reject) => {
+    let timeoutId = setTimeout(() => {
+        reject(new Error('No response from device within 15s'));
+    }, 15000);
 
-                        const handler = (topic, msg) => {
-                            if (topic === txTopic) {
-                                const response = JSON.parse(msg.toString());
-                                if (response.error) {
-                                    reject(new Error(response.error.message || 'OTA error'));
-                                } else {
-                                    resolve();
-                                }
-                                client.off('message', handler);
-                                if (sub) client.unsubscribe(txTopic);
-                            }
-                        };
+    const handler = (topicMsg, msg) => {
+        if (topicMsg !== txTopic) return;
 
-                        client.on('message', handler);
+        clearTimeout(timeoutId);
+        client.off('message', handler);
 
-                        setTimeout(() => reject(new Error('Timeout waiting for response')), 15000);
-                    });
+        const text = msg.toString().trim();
+        console.log('Received tx response:', text);
+
+        try {
+            const response = JSON.parse(text);
+            if (response.error) {
+                reject(new Error(response.error.message || 'OTA error from device'));
+            } else if (response.result && response.result.status === 'ok') {
+                resolve();  // Chunk accepted
+            } else {
+                reject(new Error('Unexpected response format'));
+            }
+        } catch (e) {
+            // Ignore non-JSON garbage on tx (e.g. debug prints)
+            console.warn('Non-JSON on tx:', text);
+            // Do NOT reject here → keep waiting if needed
+        }
+    };
+
+    client.on('message', handler);
+});
 
                     offset += chunk.size;
                     updateProgress((offset / total) * 100);
