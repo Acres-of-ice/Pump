@@ -15,7 +15,7 @@
             --border:    #e2e8f0;
             --text:      #0f172a;
             --text-mute: #64748b;
-            --accent:    #3b82f6;     /* primary blue */
+            --accent:    #3b82f6;
             --success:   #10b981;
             --danger:    #ef4444;
             --shadow-sm: 0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.1);
@@ -23,11 +23,7 @@
             --radius:    10px;
         }
 
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin:0; padding:0; box-sizing:border-box; }
 
         body {
             font-family: 'Inter', system-ui, sans-serif;
@@ -47,10 +43,7 @@
             border-bottom: 1px solid var(--border);
         }
 
-        .logo {
-            height: 36px;
-            width: auto;
-        }
+        .logo { height: 36px; width: auto; }
 
         .app-title {
             font-size: 1.25rem;
@@ -85,9 +78,7 @@
             letter-spacing: 0.05em;
         }
 
-        .device-list {
-            list-style: none;
-        }
+        .device-list { list-style: none; }
 
         .device-item {
             padding: 10px 14px;
@@ -98,9 +89,7 @@
             color: var(--text);
         }
 
-        .device-item:hover {
-            background: #f1f5f9;
-        }
+        .device-item:hover { background: #f1f5f9; }
 
         .device-item.active {
             background: var(--accent);
@@ -158,9 +147,7 @@
         .btn-on  { background: var(--success); }
         .btn-off { background: var(--danger); }
 
-        .status-box {
-            text-align: center;
-        }
+        .status-box { text-align: center; }
 
         .pump-state {
             font-size: 2.5rem;
@@ -193,6 +180,7 @@
             display: flex;
             flex-direction: column;
             gap: 16px;
+            max-width: 500px;
         }
 
         .file-input {
@@ -214,50 +202,36 @@
             transition: background 0.2s;
         }
 
-        .upload-btn:hover {
-            background: #2563eb;
-        }
-
-        .upload-btn:disabled {
-            background: #94a3b8;
-            cursor: not-allowed;
-        }
+        .upload-btn:hover { background: #2563eb; }
+        .upload-btn:disabled { background: #94a3b8; cursor: not-allowed; }
 
         .progress-bar {
-            height: 6px;
+            height: 8px;
             background: var(--border);
-            border-radius: 3px;
-            margin-top: 8px;
+            border-radius: 4px;
+            overflow: hidden;
         }
 
         .progress-fill {
             height: 100%;
             background: var(--success);
-            width: 0;
-            transition: width 0.3s ease;
-            border-radius: 3px;
+            width: 0%;
+            transition: width 0.4s ease;
         }
 
         .ota-status {
             font-size: 0.875rem;
-            color: var(--text-mute);
-            margin-top: 8px;
+            min-height: 1.2em;
         }
 
-        .ota-status.success { color: var(--success); }
-        .ota-status.error { color: var(--danger); }
+        .ota-status.waiting   { color: #d97706; }
+        .ota-status.success   { color: var(--success); }
+        .ota-status.error     { color: var(--danger); }
 
         @media (max-width: 960px) {
-            .dashboard {
-                grid-template-columns: 1fr;
-            }
-            .sidebar {
-                order: -1;
-            }
-            .buttons {
-                flex-direction: column;
-                align-items: center;
-            }
+            .dashboard { grid-template-columns: 1fr; }
+            .sidebar { order: -1; }
+            .buttons { flex-direction: column; align-items: center; }
         }
     </style>
 </head>
@@ -292,7 +266,7 @@
                 <div class="ota-header">Firmware Update (OTA)</div>
                 <div class="ota-form">
                     <input type="file" id="firmwareFile" accept=".bin" class="file-input">
-                    <button id="uploadBtn" class="upload-btn" disabled>Upload Firmware</button>
+                    <button id="uploadBtn" class="upload-btn" disabled>Start OTA Upload</button>
                     <div class="progress-bar">
                         <div id="progressFill" class="progress-fill"></div>
                     </div>
@@ -315,7 +289,9 @@
         let selectedDevice = 'Shey';
         let devices = {};
         let otaInProgress = false;
-        const chunkSize = 4096;  // 4KB chunks for OTA
+        const chunkSize = 4096; // keep 4KB – safe for most ESP32 buffers
+
+        // ──────────────── Device list & pump control ────────────────
 
         function updateDeviceList() {
             const list = document.getElementById('deviceList');
@@ -347,10 +323,12 @@
             }
         }
 
-        function setOtaStatus(message, className = '') {
-            const statusEl = document.getElementById('otaStatus');
-            statusEl.textContent = message;
-            statusEl.className = 'ota-status ' + className;
+        // ──────────────── OTA Helpers ────────────────
+
+        function setOtaStatus(msg, type = '') {
+            const el = document.getElementById('otaStatus');
+            el.textContent = msg;
+            el.className = 'ota-status ' + type;
         }
 
         function updateProgress(percent) {
@@ -358,85 +336,118 @@
         }
 
         async function uploadFirmware(file) {
-            if (otaInProgress || !client?.connected || !selectedDevice) {
-                setOtaStatus('Cannot start upload: Not connected or no device selected', 'error');
+            if (otaInProgress) return;
+            if (!client?.connected || !selectedDevice) {
+                setOtaStatus('Cannot upload: Not connected or no device selected', 'error');
                 return;
             }
 
             otaInProgress = true;
-            document.getElementById('uploadBtn').disabled = true;
-            setOtaStatus('Uploading...');
+            const uploadBtn = document.getElementById('uploadBtn');
+            uploadBtn.disabled = true;
+            setOtaStatus('Preparing upload...', 'waiting');
             updateProgress(0);
 
             const rxTopic = `${prefix}/${selectedDevice}/rx`;
             const txTopic = `${prefix}/${selectedDevice}/tx`;
-            const total = file.size;
+            const totalSize = file.size;
+            let offset = 0;
 
             try {
-                const reader = new FileReader();
-                let offset = 0;
-
-                while (offset < total) {
+                while (offset < totalSize) {
                     const chunk = file.slice(offset, offset + chunkSize);
-                    const base64Chunk = await new Promise(resolve => {
-                        reader.onload = () => resolve(reader.result.split(',')[1]);  // Get base64 without prefix
-                        reader.readAsDataURL(chunk);
-                    });
+                    const base64 = await chunkToBase64(chunk);
 
                     const payload = JSON.stringify({
-                        method: 'ota.upload',
+                        method: "ota.upload",
                         params: {
                             offset: offset,
-                            total: total,
-                            chunk: base64Chunk
+                            total: totalSize,
+                            chunk: base64
                         }
                     });
 
-await new Promise((resolve, reject) => {
-    let timeoutId = setTimeout(() => {
-        reject(new Error('No response from device within 15s'));
-    }, 15000);
+                    setOtaStatus(`Sending chunk ${offset} – ${offset + chunk.size} / ${totalSize} bytes...`, 'waiting');
 
-    const handler = (topicMsg, msg) => {
-        if (topicMsg !== txTopic) return;
-
-        clearTimeout(timeoutId);
-        client.off('message', handler);
-
-        const text = msg.toString().trim();
-        console.log('Received tx response:', text);
-
-        try {
-            const response = JSON.parse(text);
-            if (response.error) {
-                reject(new Error(response.error.message || 'OTA error from device'));
-            } else if (response.result && response.result.status === 'ok') {
-                resolve();  // Chunk accepted
-            } else {
-                reject(new Error('Unexpected response format'));
-            }
-        } catch (e) {
-            // Ignore non-JSON garbage on tx (e.g. debug prints)
-            console.warn('Non-JSON on tx:', text);
-            // Do NOT reject here → keep waiting if needed
-        }
-    };
-
-    client.on('message', handler);
-});
+                    await sendChunkAndWaitForAck(rxTopic, txTopic, payload, offset);
 
                     offset += chunk.size;
-                    updateProgress((offset / total) * 100);
+                    updateProgress((offset / totalSize) * 100);
                 }
 
-                setOtaStatus('Upload complete. Device rebooting...', 'success');
+                setOtaStatus('Upload finished. Device should reboot and apply firmware.', 'success');
             } catch (err) {
-                setOtaStatus(`Error: ${err.message}`, 'error');
+                console.error('OTA error:', err);
+                setOtaStatus(`Upload failed: ${err.message}`, 'error');
             } finally {
                 otaInProgress = false;
-                document.getElementById('uploadBtn').disabled = false;
+                uploadBtn.disabled = false;
+                updateProgress(0);
             }
         }
+
+        function chunkToBase64(chunk) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const base64 = reader.result.split(',')[1]; // remove data:application/octet-stream;base64,
+                    resolve(base64);
+                };
+                reader.readAsDataURL(chunk);
+            });
+        }
+
+        function sendChunkAndWaitForAck(rxTopic, txTopic, payload, currentOffset) {
+            return new Promise((resolve, reject) => {
+                let responded = false;
+                const timeoutMs = 25000; // 25 seconds – increased for slow SIM
+
+                const timeoutId = setTimeout(() => {
+                    if (!responded) {
+                        responded = true;
+                        client.off('message', messageHandler);
+                        reject(new Error(`No response from device after ${timeoutMs/1000}s (offset ${currentOffset})`));
+                    }
+                }, timeoutMs);
+
+                const messageHandler = (topic, message) => {
+                    if (topic !== txTopic) return;
+
+                    responded = true;
+                    clearTimeout(timeoutId);
+                    client.off('message', messageHandler);
+
+                    const text = message.toString().trim();
+                    console.log('[TX]', text);
+
+                    try {
+                        const json = JSON.parse(text);
+                        if (json.result && json.result.status === 'ok') {
+                            setOtaStatus(`Chunk accepted (offset ${currentOffset})`, 'success');
+                            resolve();
+                        } else if (json.error) {
+                            reject(new Error(json.error.message || 'Device reported error'));
+                        } else {
+                            reject(new Error('Unexpected response format'));
+                        }
+                    } catch (e) {
+                        console.warn('Non-JSON response on tx:', text);
+                        // Do not reject – keep waiting if garbage arrives
+                    }
+                };
+
+                client.on('message', messageHandler);
+                client.publish(rxTopic, payload, { qos: 1 }, (err) => {
+                    if (err) {
+                        clearTimeout(timeoutId);
+                        client.off('message', messageHandler);
+                        reject(new Error('Publish failed: ' + err.message));
+                    }
+                });
+            });
+        }
+
+        // ──────────────── MQTT Connection ────────────────
 
         function connect() {
             client = mqtt.connect(brokerUrl, options);
@@ -445,8 +456,8 @@ await new Promise((resolve, reject) => {
                 document.getElementById('connectionStatus').textContent = 'Connected';
                 document.getElementById('connectionStatus').className = 'connection connected';
 
-                client.subscribe(`${prefix}/+/status`, () => {});
-                client.subscribe(`${prefix}/+/tx`, () => {});  // For OTA responses
+                client.subscribe(`${prefix}/+/status`);
+                client.subscribe(`${prefix}/+/tx`);
             });
 
             client.on('error', (err) => {
@@ -475,12 +486,12 @@ await new Promise((resolve, reject) => {
                             if (id === selectedDevice) updatePumpStatus();
                         }
                     } catch {}
-                } else if (parts.length === 3 && parts[2] === 'tx') {
-                    // OTA responses handled in upload function
-                    console.log('TX response:', message.toString());
                 }
+                // tx messages are handled per-chunk in upload
             });
         }
+
+        // ──────────────── Event Listeners ────────────────
 
         document.getElementById('onBtn').addEventListener('click', () => {
             if (client?.connected && selectedDevice) {
@@ -504,9 +515,7 @@ await new Promise((resolve, reject) => {
 
         document.getElementById('uploadBtn').addEventListener('click', () => {
             const file = document.getElementById('firmwareFile').files[0];
-            if (file) {
-                uploadFirmware(file);
-            }
+            if (file) uploadFirmware(file);
         });
 
         connect();
