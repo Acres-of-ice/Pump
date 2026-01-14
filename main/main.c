@@ -69,6 +69,7 @@ static struct device_state s_device_state = {false, FIRMWARE_VERSION};
 //   return buf;
 // }
 
+
 static char *make_topic_name(char *buf, size_t len, const char *suffix) {
   // FIXED DEVICE ID - NO MORE AUTO-GENERATION!
   mg_snprintf(buf, len, "%s/%s/%s", s_topic_prefix, DEVICE_ID, suffix);
@@ -139,6 +140,15 @@ static void rpc_state_set(struct mg_rpc_req *r) {
     mg_rpc_err(r, 2, "Commands: PUMP ON | PUMP OFF");
   }
 }
+
+// static void rpc_state_get(struct mg_rpc_req *r) {
+//   char json[128];
+//   snprintf(json, sizeof(json), 
+//     "{\"pump_status\":%s}", 
+//     s_device_state.pump_status ? "true" : "false");
+//   mg_rpc_ok(r, "%s", json);
+// }
+
 
 static void rpc_ota_upload(struct mg_rpc_req *r) {
   long ofs = mg_json_get_long(r->frame, "$.params.offset", -1);
@@ -270,7 +280,8 @@ struct mg_connection *my_mqtt_connect(mg_event_handler_t fn) {
   opts.message = mg_str(message);
 
   if (s_rpc == NULL) {
-    //mg_rpc_add(&s_rpc, mg_str("state.set"), rpc_state_set, NULL);
+    // mg_rpc_add(&s_rpc, mg_str("state.set"), rpc_state_set, NULL);
+    // mg_rpc_add(&s_rpc, mg_str("state.get"), rpc_state_get, NULL);
     mg_rpc_add(&s_rpc, mg_str("ota.upload"), rpc_ota_upload, NULL);
   }
 
@@ -304,8 +315,6 @@ void app_main() {
 
   mongoose_init();
 
-//  s_ota_active = false;
-//  s_ota_handle = 0;
 
   gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
   gpio_set_level(LED_GPIO, 0);  // LED OFF initially

@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pump Control - Remote Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+
+        .device-id {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .connection-status.disconnected {
+            background: #fee;
+            color: #c33;
+        }
+
+        .connection-status.connected {
+            background: #efe;
+            color: #3c3;
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .connection-status.disconnected .status-indicator {
+            background: #c33;
+        }
+
+        .connection-status.connected .status-indicator {
+            background: #3c3;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .pump-status-card {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            border-radius: 15px;
+            padding: 40px;
+            margin-bottom: 30px;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+
+        .pump-icon {
+            font-size: 80px;
+            margin-bottom: 20px;
+            animation: float 3s ease-in-out infinite;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+
+        .pump-status-label {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        .pump-status-value {
+            font-size: 48px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            transition: all 0.3s ease;
+        }
+
+        .pump-status-value.on {
+            color: #10b981;
+            text-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
+        }
+
+        .pump-status-value.off {
+            color: #ef4444;
+        }
+
+        .control-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        button {
+            padding: 20px;
+            font-size: 18px;
+            font-weight: 700;
+            border: none;
+            border-radius: 15px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        button::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+
+        button:active::before {
+            width: 300px;
+            height: 300px;
+        }
+
+        button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+        }
+
+        button:active {
+            transform: translateY(-1px);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-on {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+        }
+
+        .btn-off {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            color: white;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .info-card {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .info-label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+
+        .info-value {
+            font-size: 20px;
+            font-weight: 700;
+            color: #333;
+        }
+
+        .settings-toggle {
+            background: #f0f4f8;
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 20px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.3s ease;
+        }
+
+        .settings-toggle:hover {
+            background: #e1e8ed;
+        }
+
+        .settings-toggle-title {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .settings-icon {
+            transition: transform 0.3s ease;
+        }
+
+        .settings-icon.open {
+            transform: rotate(180deg);
+        }
+
+        .settings-panel {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+        }
+
+        .settings-panel.open {
+            max-height: 500px;
+        }
+
+        .settings-content {
+            background: #f0f4f8;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        input[type="text"],
+        input[type="number"] {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s ease;
+        }
+
+        input[type="text"]:focus,
+        input[type="number"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+
+        .btn-connect {
+            width: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            margin-top: 15px;
+        }
+
+        .log-section {
+            background: #1e1e1e;
+            border-radius: 12px;
+            padding: 20px;
+            max-height: 250px;
+            overflow-y: auto;
+        }
+
+        .log-title {
+            color: #888;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+        }
+
+        .log-entry {
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            color: #00ff00;
+            margin-bottom: 5px;
+            line-height: 1.5;
+        }
+
+        .log-entry.error {
+            color: #ff4444;
+        }
+
+        .log-entry.info {
+            color: #4488ff;
+        }
+
+        .log-entry.success {
+            color: #44ff88;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: #999;
+            font-size: 12px;
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                margin: 0;
+                border-radius: 0;
+            }
+
+            .info-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚿 Pump Control</h1>
+            <div class="device-id">Device: Shey | Remote Access</div>
+        </div>
+
+        <div class="content">
+            <div id="connectionStatus" class="connection-status disconnected">
+                <div class="status-indicator"></div>
+                <span id="statusText">Click settings to connect</span>
+            </div>
+
+            <!-- Settings Toggle -->
+            <div class="settings-toggle" onclick="toggleSettings()">
+                <span class="settings-toggle-title">⚙️ MQTT Settings</span>
+                <span class="settings-icon" id="settingsIcon">▼</span>
+            </div>
+
+            <div class="settings-panel" id="settingsPanel">
+                <div class="settings-content">
+                    <div class="form-group">
+                        <label class="form-label">Broker URL</label>
+                        <input type="text" id="brokerUrl" value="broker.hivemq.com" placeholder="broker.hivemq.com">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">WebSocket Port</label>
+                        <input type="number" id="brokerPort" value="8000" placeholder="8000">
+                    </div>
+                    <div class="form-group">
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="useSsl">
+                            <label class="form-label" style="margin: 0">Use SSL/TLS (wss://)</label>
+                        </div>
+                    </div>
+                    <button class="btn-connect" onclick="connectToBroker()">
+                        🔌 Connect to Broker
+                    </button>
+                </div>
+            </div>
+
+            <!-- Pump Status -->
+            <div class="pump-status-card">
+                <div class="pump-icon" id="pumpIcon">💧</div>
+                <div class="pump-status-label">Current Status</div>
+                <div class="pump-status-value off" id="pumpStatus">OFFLINE</div>
+            </div>
+
+            <!-- Control Buttons -->
+            <div class="control-buttons">
+                <button class="btn-on" id="btnOn" onclick="sendCommand('PUMP ON')" disabled>
+                    ▶️ Turn ON
+                </button>
+                <button class="btn-off" id="btnOff" onclick="sendCommand('PUMP OFF')" disabled>
+                    ⏸️ Turn OFF
+                </button>
+            </div>
+
+            <!-- Info Grid -->
+            <div class="info-grid">
+                <div class="info-card">
+                    <div class="info-label">Device Status</div>
+                    <div class="info-value" id="deviceStatus">-</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-label">Firmware</div>
+                    <div class="info-value" id="firmwareVersion">-</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-label">Last Update</div>
+                    <div class="info-value" id="lastUpdated">-</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-label">Connection</div>
+                    <div class="info-value" id="connectionTime">-</div>
+                </div>
+            </div>
+
+            <!-- Activity Log -->
+            <div class="log-section">
+                <div class="log-title">Activity Log</div>
+                <div id="logSection"></div>
+            </div>
+        </div>
+
+        <div class="footer">
+            Pump Control Dashboard v1.0 | Powered by MQTT
+        </div>
+    </div>
+
+    <script>
+        const DEVICE_ID = "Shey";
+        const TOPIC_PREFIX = "mg_mqtt_dashboard";
+        const TOPIC_STATUS = `${TOPIC_PREFIX}/${DEVICE_ID}/status`;
+        const TOPIC_RX = `${TOPIC_PREFIX}/${DEVICE_ID}/rx`;
+        const TOPIC_TX = `${TOPIC_PREFIX}/${DEVICE_ID}/tx`;
+
+        let client = null;
+        let isConnected = false;
+        let connectionTime = null;
+
+        function toggleSettings() {
+            const panel = document.getElementById('settingsPanel');
+            const icon = document.getElementById('settingsIcon');
+            panel.classList.toggle('open');
+            icon.classList.toggle('open');
+        }
+
+        function log(message, type = 'info') {
+            const logSection = document.getElementById('logSection');
+            const timestamp = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${timestamp}] ${message}`;
+            logSection.insertBefore(entry, logSection.firstChild);
+            
+            // Keep only last 50 entries
+            while (logSection.children.length > 50) {
+                logSection.removeChild(logSection.lastChild);
+            }
+            
+            console.log(message);
+        }
+
+        function updateConnectionStatus(connected) {
+            isConnected = connected;
+            const statusDiv = document.getElementById('connectionStatus');
+            const statusText = document.getElementById('statusText');
+            const btnOn = document.getElementById('btnOn');
+            const btnOff = document.getElementById('btnOff');
+
+            if (connected) {
+                statusDiv.className = 'connection-status connected';
+                statusText.textContent = '✅ Connected to Broker';
+                btnOn.disabled = false;
+                btnOff.disabled = false;
+                connectionTime = new Date();
+                updateConnectionTime();
+                log('Successfully connected to MQTT broker', 'success');
+            } else {
+                statusDiv.className = 'connection-status disconnected';
+                statusText.textContent = '❌ Disconnected';
+                btnOn.disabled = true;
+                btnOff.disabled = true;
+                document.getElementById('connectionTime').textContent = '-';
+                log('Disconnected from MQTT broker', 'error');
+            }
+        }
+
+        function updateConnectionTime() {
+            if (connectionTime && isConnected) {
+                const seconds = Math.floor((new Date() - connectionTime) / 1000);
+                const minutes = Math.floor(seconds / 60);
+                const hours = Math.floor(minutes / 60);
+                
+                let timeStr;
+                if (hours > 0) {
+                    timeStr = `${hours}h ${minutes % 60}m`;
+                } else if (minutes > 0) {
+                    timeStr = `${minutes}m ${seconds % 60}s`;
+                } else {
+                    timeStr = `${seconds}s`;
+                }
+                
+                document.getElementById('connectionTime').textContent = timeStr;
+                setTimeout(updateConnectionTime, 1000);
+            }
+        }
+
+        function updatePumpStatus(status) {
+            const pumpStatus = document.getElementById('pumpStatus');
+            const pumpIcon = document.getElementById('pumpIcon');
+            
+            if (status) {
+                pumpStatus.textContent = 'ON';
+                pumpStatus.className = 'pump-status-value on';
+                pumpIcon.textContent = '💦';
+                log('Pump is now ON', 'success');
+            } else {
+                pumpStatus.textContent = 'OFF';
+                pumpStatus.className = 'pump-status-value off';
+                pumpIcon.textContent = '💧';
+                log('Pump is now OFF', 'info');
+            }
+            
+            const now = new Date();
+            document.getElementById('lastUpdated').textContent = now.toLocaleTimeString();
+        }
+
+        function connectToBroker() {
+            const brokerUrl = document.getElementById('brokerUrl').value.trim();
+            const brokerPort = document.getElementById('brokerPort').value;
+            const useSsl = document.getElementById('useSsl').checked;
+
+            if (!brokerUrl) {
+                log('Please enter a broker URL', 'error');
+                return;
+            }
+
+            log(`Connecting to ${brokerUrl}:${brokerPort}...`, 'info');
+
+            const clientId = `pump_remote_${Math.random().toString(16).substr(2, 8)}`;
+            client = new Paho.MQTT.Client(brokerUrl, Number(brokerPort), clientId);
+
+            client.onConnectionLost = onConnectionLost;
+            client.onMessageArrived = onMessageArrived;
+
+            client.connect({
+                useSSL: useSsl,
+                onSuccess: onConnect,
+                onFailure: onFailure,
+                reconnect: true,
+                timeout: 10
+            });
+
+            // Auto-close settings after connecting
+            setTimeout(() => {
+                const panel = document.getElementById('settingsPanel');
+                const icon = document.getElementById('settingsIcon');
+                if (panel.classList.contains('open')) {
+                    panel.classList.remove('open');
+                    icon.classList.remove('open');
+                }
+            }, 1000);
+        }
+
+        function onConnect() {
+            updateConnectionStatus(true);
+            
+            client.subscribe(TOPIC_STATUS, { qos: 1 });
+            client.subscribe(TOPIC_TX, { qos: 1 });
+            
+            log(`Subscribed to status topic`, 'success');
+            log(`Subscribed to response topic`, 'success');
+            log('Dashboard ready! You can now control the pump remotely.', 'success');
+        }
+
+        function onFailure(error) {
+            log(`Connection failed: ${error.errorMessage}`, 'error');
+            updateConnectionStatus(false);
+        }
+
+        function onConnectionLost(response) {
+            if (response.errorCode !== 0) {
+                log(`Connection lost: ${response.errorMessage}`, 'error');
+            }
+            updateConnectionStatus(false);
+        }
+
+        function onMessageArrived(message) {
+            const topic = message.destinationName;
+            const payload = message.payloadString;
+
+            try {
+                const data = JSON.parse(payload);
+                
+                if (topic === TOPIC_STATUS && data.method === 'status.notify') {
+                    const params = data.params;
+                    
+                    if (params.status) {
+                        const status = params.status.toUpperCase();
+                        document.getElementById('deviceStatus').textContent = status;
+                        
+                        if (status === 'ONLINE') {
+                            log('Device is ONLINE', 'success');
+                        } else {
+                            log('Device is OFFLINE', 'error');
+                        }
+                    }
+                    
+                    if (params.pump_status !== undefined) {
+                        updatePumpStatus(params.pump_status);
+                    }
+                    
+                    if (params.firmware_version) {
+                        document.getElementById('firmwareVersion').textContent = params.firmware_version;
+                    }
+                }
+                
+                if (topic === TOPIC_TX) {
+                    log(`Response received: ${JSON.stringify(data)}`, 'info');
+                }
+            } catch (e) {
+                // Not JSON, might be plain text response
+                log(`Received: ${payload}`, 'info');
+            }
+        }
+
+        function sendCommand(command) {
+            if (!isConnected) {
+                log('ERROR: Not connected to broker! Click settings to connect.', 'error');
+                alert('Please connect to the MQTT broker first!');
+                return;
+            }
+
+            log(`📤 Sending: ${command}`, 'info');
+            
+            const message = new Paho.MQTT.Message(command);
+            message.destinationName = TOPIC_RX;
+            message.qos = 1;
+            
+            try {
+                client.send(message);
+                log(`✅ Command sent successfully`, 'success');
+            } catch (error) {
+                log(`❌ Failed to send command: ${error}`, 'error');
+            }
+        }
+
+        // Initialize on load
+        window.onload = function() {
+            log('🚀 Dashboard loaded and ready', 'success');
+            log('Click "MQTT Settings" to configure and connect', 'info');
+            log(`Configured for device: ${DEVICE_ID}`, 'info');
+        };
+    </script>
+</body>
+</html>
