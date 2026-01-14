@@ -3,174 +3,265 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pump Control Dashboard</title>
+    <title>Acres of Ice - Pump Controller</title>
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
-            text-align: center;
-            padding: 30px;
             background-color: #f4f4f4;
-            max-width: 600px;
+            margin: 0;
+            padding: 20px;
+            color: #333;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        h1 {
+            font-size: 2.5em;
+            margin: 0;
+            color: #007BFF;
+        }
+        h2 {
+            font-size: 1.5em;
+            margin: 5px 0 0;
+            color: #555;
+        }
+        .container {
+            display: flex;
+            max-width: 1200px;
             margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            overflow: hidden;
         }
-        h1 { color: #333; }
-        .section { margin: 20px 0; padding: 15px; background: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        input, button {
+        .sidebar {
+            width: 250px;
+            padding: 20px;
+            background: #e9ecef;
+            border-right: 1px solid #ddd;
+        }
+        .sidebar h3 {
+            margin-top: 0;
+            color: #007BFF;
+        }
+        .device-list {
+            list-style: none;
+            padding: 0;
+        }
+        .device-list li {
             padding: 10px;
-            margin: 8px;
-            font-size: 1em;
+            margin-bottom: 10px;
+            background: #fff;
+            border: 1px solid #ddd;
             border-radius: 5px;
-            border: 1px solid #ccc;
-        }
-        button {
             cursor: pointer;
+            transition: background 0.3s;
+        }
+        .device-list li:hover {
+            background: #f0f0f0;
+        }
+        .device-list li.selected {
+            background: #007BFF;
+            color: white;
+            font-weight: bold;
+        }
+        .main {
+            flex: 1;
+            padding: 20px;
+            text-align: center;
+        }
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .control-btn {
+            padding: 20px 40px;
+            font-size: 1.5em;
             color: white;
             border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.2s;
         }
-        #connectBtn { background: #2196F3; }
-        #onBtn { background: #4CAF50; }
-        #offBtn { background: #f44336; }
-        #status { font-weight: bold; font-size: 1.1em; }
-        #pumpStatus { font-size: 1.4em; }
-        #log { margin-top: 20px; text-align: left; background: #222; color: #0f0; padding: 10px; height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.9em; }
+        .control-btn:hover {
+            transform: scale(1.05);
+        }
+        #onBtn {
+            background: #28a745;
+        }
+        #offBtn {
+            background: #dc3545;
+        }
+        #pumpStatus {
+            font-size: 1.8em;
+            font-weight: bold;
+            margin: 20px 0;
+        }
+        #pumpStatus.on {
+            color: #28a745;
+        }
+        #pumpStatus.off {
+            color: #dc3545;
+        }
+        #connectionStatus {
+            font-size: 1.1em;
+            margin-bottom: 20px;
+            color: #555;
+        }
+        @media (max-width: 768px) {
+            .container {
+                flex-direction: column;
+            }
+            .sidebar {
+                width: 100%;
+                border-right: none;
+                border-bottom: 1px solid #ddd;
+            }
+        }
     </style>
 </head>
 <body>
-    <h1>Pump Control - Shey Device</h1>
+    <header>
+        <h1>Acres of Ice</h1>
+        <h2>Pump Controller</h2>
+    </header>
 
-    <div class="section">
-        <label>Broker URL (wss required for HTTPS page):</label><br>
-        <input type="text" id="brokerUrl" value="wss://broker.hivemq.com:8884/mqtt" style="width: 90%;">
-        <br>
-        <button id="connectBtn">Connect to Broker</button>
-        <p id="status">Status: Disconnected</p>
-    </div>
+    <div class="container">
+        <div class="sidebar">
+            <h3>Available Devices</h3>
+            <ul id="deviceList" class="device-list">
+                <!-- Devices will be populated here -->
+            </ul>
+        </div>
 
-    <div class="section">
-        <p>Pump Status: <span id="pumpStatus">Unknown</span></p>
-        <button id="onBtn">Turn Pump ON</button>
-        <button id="offBtn">Turn Pump OFF</button>
-    </div>
-
-    <div class="section" id="logContainer">
-        <strong>Console Log:</strong>
-        <div id="log"></div>
+        <div class="main">
+            <p id="connectionStatus">Connecting to MQTT broker...</p>
+            <div class="controls">
+                <button id="onBtn" class="control-btn">ON</button>
+                <button id="offBtn" class="control-btn">OFF</button>
+            </div>
+            <p id="pumpStatus" class="off">Pump OFF</p>
+        </div>
     </div>
 
     <script>
-        let client = null;
-
+        const brokerUrl = 'wss://broker.hivemq.com:8884/mqtt';
         const prefix = 'mg_mqtt_dashboard';
-        const device = 'Shey';
-        const rxTopic    = `${prefix}/${device}/rx`;
-        const statusTopic = `${prefix}/${device}/status`;
-        const txTopic     = `${prefix}/${device}/tx`;
+        const options = {
+            clean: true,
+            connectTimeout: 5000,
+            clientId: 'pump-controller-' + Math.random().toString(16).substr(2, 8),
+        };
 
-        function log(message) {
-            const logDiv = document.getElementById('log');
-            logDiv.innerHTML += message + '<br>';
-            logDiv.scrollTop = logDiv.scrollHeight;
+        let client = null;
+        let selectedDevice = 'Shey';  // Default device
+        let devices = {};  // Store online devices: {deviceId: {pump_status: false, ...}}
+
+        function updateDeviceList() {
+            const list = document.getElementById('deviceList');
+            list.innerHTML = '';
+            Object.keys(devices).forEach(id => {
+                const li = document.createElement('li');
+                li.textContent = id;
+                li.onclick = () => selectDevice(id);
+                if (id === selectedDevice) li.classList.add('selected');
+                list.appendChild(li);
+            });
+        }
+
+        function selectDevice(id) {
+            selectedDevice = id;
+            updateDeviceList();
+            updatePumpStatus();
+        }
+
+        function updatePumpStatus() {
+            const statusElem = document.getElementById('pumpStatus');
+            if (devices[selectedDevice]) {
+                const isOn = devices[selectedDevice].pump_status;
+                statusElem.textContent = `Pump ${isOn ? 'ON' : 'OFF'}`;
+                statusElem.className = isOn ? 'on' : 'off';
+            } else {
+                statusElem.textContent = 'Pump OFF';
+                statusElem.className = 'off';
+            }
         }
 
         function connect() {
-            const brokerUrl = document.getElementById('brokerUrl').value.trim();
-            if (!brokerUrl) {
-                alert('Please enter a broker URL');
-                return;
-            }
-
-            if (client) {
-                client.end();
-                client = null;
-            }
-
-            document.getElementById('status').innerText = 'Status: Connecting...';
-            document.getElementById('status').style.color = 'blue';
-            log(`Attempting connection to: ${brokerUrl}`);
-
-            const options = {
-                clean: true,
-                connectTimeout: 8000,
-                clientId: 'web-pump-dashboard-' + Math.random().toString(16).substr(2, 8),
-                reconnectPeriod: 5000,     // auto-reconnect every 5s
-            };
-
             client = mqtt.connect(brokerUrl, options);
 
             client.on('connect', () => {
-                document.getElementById('status').innerText = 'Status: Connected ✓';
-                document.getElementById('status').style.color = 'green';
-                log('CONNECTED successfully');
+                document.getElementById('connectionStatus').innerText = 'Connected to MQTT ✓';
+                document.getElementById('connectionStatus').style.color = 'green';
 
-                client.subscribe(statusTopic, (err) => {
-                    if (err) {
-                        log('Subscribe error (status): ' + err);
-                    } else {
-                        log(`Subscribed to ${statusTopic} (retained status should arrive)`);
-                    }
-                });
-
-                client.subscribe(txTopic, (err) => {
-                    if (!err) log(`Subscribed to ${txTopic}`);
+                // Subscribe to all devices' status for discovery
+                client.subscribe(`${prefix}/+/status`, (err) => {
+                    if (!err) console.log('Subscribed to all status topics');
                 });
             });
 
             client.on('error', (err) => {
-                log('Connection ERROR: ' + (err.message || err));
-                document.getElementById('status').innerText = 'Status: Connection failed';
-                document.getElementById('status').style.color = 'red';
+                document.getElementById('connectionStatus').innerText = `Connection failed: ${err.message}`;
+                document.getElementById('connectionStatus').style.color = 'red';
             });
 
             client.on('close', () => {
-                log('Connection closed / disconnected');
-                document.getElementById('status').innerText = 'Status: Disconnected';
-                document.getElementById('status').style.color = 'orange';
+                document.getElementById('connectionStatus').innerText = 'Disconnected';
+                document.getElementById('connectionStatus').style.color = 'orange';
             });
 
             client.on('message', (topic, message) => {
-                const msg = message.toString();
-                log(`← ${topic}: ${msg}`);
-
-                if (topic === statusTopic) {
+                const parts = topic.split('/');
+                if (parts.length === 3 && parts[2] === 'status') {
+                    const deviceId = parts[1];
                     try {
-                        const data = JSON.parse(msg);
-                        if (data.method === 'status.notify' && data.params && 'pump_status' in data.params) {
-                            const isOn = data.params.pump_status === true;
-                            document.getElementById('pumpStatus').innerText = isOn ? 'ON' : 'OFF';
-                            document.getElementById('pumpStatus').style.color = isOn ? 'green' : 'red';
-                            log(`Pump status updated: ${isOn ? 'ON' : 'OFF'}`);
+                        const data = JSON.parse(message.toString());
+                        if (data.method === 'status.notify' && data.params && data.params.status === 'online') {
+                            devices[deviceId] = {
+                                pump_status: data.params.pump_status === true
+                            };
+                            updateDeviceList();
+                            if (deviceId === selectedDevice) updatePumpStatus();
+                        } else {
+                            // Offline or other → remove from list
+                            delete devices[deviceId];
+                            updateDeviceList();
+                            if (deviceId === selectedDevice) updatePumpStatus();
                         }
                     } catch (e) {
-                        log('JSON parse error: ' + e);
+                        console.error('JSON parse error:', e);
                     }
                 }
             });
         }
 
         // Button handlers
-        document.getElementById('connectBtn').addEventListener('click', connect);
-
         document.getElementById('onBtn').addEventListener('click', () => {
-            if (client && client.connected) {
+            if (client && client.connected && selectedDevice) {
+                const rxTopic = `${prefix}/${selectedDevice}/rx`;
                 client.publish(rxTopic, 'PUMP ON', { qos: 1 });
-                log('→ Sent: PUMP ON');
+                console.log(`Sent PUMP ON to ${selectedDevice}`);
             } else {
-                alert('Not connected to broker');
+                alert('Not connected or no device selected');
             }
         });
 
         document.getElementById('offBtn').addEventListener('click', () => {
-            if (client && client.connected) {
+            if (client && client.connected && selectedDevice) {
+                const rxTopic = `${prefix}/${selectedDevice}/rx`;
                 client.publish(rxTopic, 'PUMP OFF', { qos: 1 });
-                log('→ Sent: PUMP OFF');
+                console.log(`Sent PUMP OFF to ${selectedDevice}`);
             } else {
-                alert('Not connected to broker');
+                alert('Not connected or no device selected');
             }
         });
 
-        // Optional: auto-connect on load (comment out if you prefer manual)
-        // connect();
+        // Initial connect
+        connect();
     </script>
 </body>
 </html>
