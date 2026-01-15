@@ -49,6 +49,8 @@ static const char *s_topic_prefix = "mg_mqtt_dashboard";
 static esp_ota_handle_t s_ota_handle = 0;
 static bool s_ota_in_progress = false;
 
+static struct mg_connection *s_mqtt_conn = NULL;
+
 struct device_state {
   bool pump_status;            // true = ON, false = OFF
   char firmware_version[20];
@@ -150,41 +152,82 @@ static void rpc_state_set(struct mg_rpc_req *r) {
 // }
 
 
+static struct mg_connection *s_mqtt_connection = NULL;
+
 static void rpc_ota_upload(struct mg_rpc_req *r) {
   long ofs = mg_json_get_long(r->frame, "$.params.offset", -1);
   long tot = mg_json_get_long(r->frame, "$.params.total", -1);
   int len = 0;
   char *buf = mg_json_get_b64(r->frame, "$.params.chunk", &len);
+  
+  printf("  📥 OTA: offset=%ld total=%ld len=%d\n", ofs, tot, len);
+  
   if (buf == NULL) {
+    printf("  ❌ buf is NULL\n");
     mg_rpc_err(r, 1, "Error processing the binary chunk.");
   } else {
+    bool success = true;
+    
     if (ofs < 0 || tot < 0) {
+      printf("  ❌ Invalid params\n");
       mg_rpc_err(r, 1, "offset and total not set");
-    } else if (ofs >= tot) {
-      mg_rpc_err(r, 1, "OTA already completed, offset %ld >= total %ld", ofs, tot);
-    }  else if (ofs == 0 && mg_ota_begin((size_t) tot) == false) {
-      mg_rpc_err(r, 1, "mg_ota_begin(%ld) failed\n", tot);
+      success = false;
+    } else if (ofs == 0 && mg_ota_begin((size_t) tot) == false) {
+      printf("  ❌ mg_ota_begin failed\n");
+      mg_rpc_err(r, 1, "mg_ota_begin(%ld) failed", tot);
       mg_ota_end();
+      success = false;
     } else if (len > 0 && mg_ota_write(buf, len) == false) {
-      mg_rpc_err(r, 1, "mg_ota_write(%lu) @%ld failed\n", len, ofs);
+      printf("  ❌ mg_ota_write failed\n");
+      mg_rpc_err(r, 1, "mg_ota_write(%d) @%ld failed", len, ofs);
       mg_ota_end();
-    }else if (ofs + len >= tot) {  // 🔥 THIS IS THE COMPLETION CHECK
-     if (mg_ota_end() == false) {
-        mg_rpc_err(r, 1, "mg_ota_end() failed");
-      } else {
-        // 🔥 CRITICAL: REBOOT HERE!
-        printf("✅ OTA SUCCESS! Rebooting...\n");
-        mg_rpc_ok(r, "OTA complete - rebooting");
-        vTaskDelay(pdMS_TO_TICKS(1000));  // 1 second delay
-        esp_restart();  // REBOOT TO NEW FIRMWARE
-      }
-    } else {
-      mg_rpc_ok(r, "%m", MG_ESC("ok"));
+      success = false;
+    } else if (ofs + len >= tot && mg_ota_end() == false) {
+      printf("  ❌ mg_ota_end failed\n");
+      mg_rpc_err(r, 1, "mg_ota_end() failed");
+      success = false;
     }
+    
+    if (success) {
+      // ✅ Success - manually publish response
+      printf("  ✅ Success: %.1f%% (%ld/%ld)\n", (ofs + len) * 100.0 / tot, ofs + len, tot);
+      
+      // Build JSON response manually
+      char response[128];
+      snprintf(response, sizeof(response), 
+               "{\"id\":null,\"result\":\"ok\"}");
+      
+      printf("  📤 Manual publish: %s\n", response);
+      
+      // Publish directly to tx topic
+      if (s_mqtt_connection != NULL) {
+        char topic[100];
+        struct mg_mqtt_opts pub_opts;
+        memset(&pub_opts, 0, sizeof(pub_opts));
+        pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
+        pub_opts.message = mg_str(response);
+        pub_opts.qos = 1;
+        mg_mqtt_pub(s_mqtt_connection, &pub_opts);
+        printf("  ✅ Response published to %s\n", topic);
+      } else {
+        printf("  ⚠️  No MQTT connection available!\n");
+      }
+      
+      // Also call mg_rpc_ok for compatibility
+      mg_rpc_ok(r, "%m", MG_ESC("ok"));
+      
+      // If last chunk
+      if (ofs + len >= tot) {
+        printf("  🎉 LAST CHUNK - OTA COMPLETE!\n");
+        printf("  ⏰ Rebooting in 2 seconds...\n");
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        esp_restart();
+      }
+    }
+    
     mg_free(buf);
   }
 }
-
 void my_mqtt_tls_init(struct mg_connection *c) {
   bool is_tls = mg_url_is_ssl(WIZARD_MQTT_URL);
   MG_DEBUG(("%lu TLS enabled: %s", c->id, is_tls ? "yes" : "no"));
@@ -223,12 +266,16 @@ void my_mqtt_on_connect(struct mg_connection *c, int code) {
 // }
 
 void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_str data) {
-  char msg[128];
+  char msg[512];  // Increased size for OTA messages
   int copy_len = (data.len < sizeof(msg) - 1) ? data.len : sizeof(msg) - 1;
   memcpy(msg, data.buf, copy_len);
   msg[copy_len] = '\0';
   
-  printf("MQTT RAW: %s\n", msg);
+  printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+  printf("📨 MQTT RX: %s\n", msg);
+  
+  // Store connection globally for RPC functions to use
+  s_mqtt_connection = c;
   
   // 🔥 DIRECT PUMP CONTROL - NO RPC LAYER!
   if (strstr(msg, "PUMP ON") != NULL) {
@@ -236,32 +283,50 @@ void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_
     s_device_state.pump_status = true;
     gpio_set_level(PUMP_ON_GPIO, 1);
     gpio_set_level(PUMP_OFF_GPIO, 0);
-    printf("GPIO12=%d GPIO13=%d ✅\n", gpio_get_level(PUMP_ON_GPIO), gpio_get_level(PUMP_OFF_GPIO));
+    printf("GPIO12=%d GPIO13=%d\n", gpio_get_level(PUMP_ON_GPIO), gpio_get_level(PUMP_OFF_GPIO));
     publish_status(c);
-    return;  // EXIT BEFORE RPC!
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
+    return;
   } 
   else if (strstr(msg, "PUMP OFF") != NULL) {
     printf("✅ PUMP OFF TRIGGERED!\n");
     s_device_state.pump_status = false;
     gpio_set_level(PUMP_ON_GPIO, 0);
     gpio_set_level(PUMP_OFF_GPIO, 1);
-    printf("GPIO12=%d GPIO13=%d ✅\n", gpio_get_level(PUMP_ON_GPIO), gpio_get_level(PUMP_OFF_GPIO));
+    printf("GPIO12=%d GPIO13=%d\n", gpio_get_level(PUMP_ON_GPIO), gpio_get_level(PUMP_OFF_GPIO));
     publish_status(c);
-    return;  // EXIT BEFORE RPC!
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
+    return;
   }
   
   // Let RPC handle other messages (OTA)
+  printf("🔄 Processing as RPC command...\n");
   struct mg_iobuf io = {0, 0, 0, 512};
-  struct mg_rpc_req rpc_req = {&s_rpc, NULL, mg_pfn_iobuf, &io, NULL, {data.buf, data.len}};
+  
+  // Initialize frame separately to avoid struct initializer issues
+  struct mg_str frame;
+  frame.buf = data.buf;
+  frame.len = data.len;
+  
+  struct mg_rpc_req rpc_req = {&s_rpc, NULL, mg_pfn_iobuf, &io, NULL, frame};
+  
+  printf("📍 Before mg_rpc_process: io.buf=%p io.len=%zu\n", io.buf, io.len);
   mg_rpc_process(&rpc_req);
+  printf("📍 After mg_rpc_process: io.buf=%p io.len=%zu\n", io.buf, io.len);
+  
   if (io.buf && io.len > 0) {
+    printf("📤 Response buffer contains: %.*s\n", (int)io.len, (char*)io.buf);
+    printf("📮 Publishing response to tx topic (backup method)...\n");
     publish_response(c, (char *) io.buf, io.len);
+    printf("✅ Response published!\n");
     publish_status(c);
+  } else {
+    printf("⚠️  No response in buffer (manual publish was used)\n");
   }
+  
   mg_iobuf_free(&io);
+  printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
 }
-
-
 struct mg_connection *my_mqtt_connect(mg_event_handler_t fn) {
   const char *url = WIZARD_MQTT_URL;
   char topic[100], message[200];
