@@ -427,15 +427,15 @@
                         // Format 1: {"result":{"status":"ok",...}}
                         if (json.result && json.result.status === 'ok') {
                             isOk = true;
-                            receivedOffset = json.result.offset;
-                            receivedWritten = json.result.written;
+                            receivedOffset = json.result.offset || currentOffset;
+                            receivedWritten = json.result.written || chunkSize;
                             console.log(`[OTA] ✅ Matched Format 1: result.status=ok`);
                         }
                         // Format 2: {"id":X,"result":{"status":"ok",...}}
                         else if (json.id !== undefined && json.result && json.result.status === 'ok') {
                             isOk = true;
-                            receivedOffset = json.result.offset;
-                            receivedWritten = json.result.written;
+                            receivedOffset = json.result.offset || currentOffset;
+                            receivedWritten = json.result.written || chunkSize;
                             console.log(`[OTA] ✅ Matched Format 2: id + result.status=ok`);
                         }
                         // Format 3: Direct {"status":"ok",...}
@@ -444,6 +444,13 @@
                             receivedOffset = json.offset;
                             receivedWritten = json.written;
                             console.log(`[OTA] ✅ Matched Format 3: direct status=ok`);
+                        }
+                        // Format 4: {"id":null,"result":"ok"} - Simple string result
+                        else if (json.result === 'ok' || json.result === 'true') {
+                            isOk = true;
+                            receivedOffset = currentOffset;
+                            receivedWritten = chunkSize;
+                            console.log(`[OTA] ✅ Matched Format 4: result="ok" (simple string)`);
                         }
                         else {
                             console.warn(`[OTA] ⚠️ Response format not recognized`, json);
