@@ -163,7 +163,6 @@
             color: var(--text-mute);
         }
 
-        /* OTA Section */
         .ota-section {
             margin-top: 48px;
             padding-top: 32px;
@@ -238,8 +237,7 @@
 </head>
 <body>
     <header class="app-header">
-        <img src="https://your-domain-or-github/acres-of-ice-logo.png" alt="Acres of Ice" class="logo">
-        <div class="app-title">Pump Controller</div>
+        <div class="app-title">🚿 Pump Controller</div>
     </header>
 
     <div class="dashboard">
@@ -291,8 +289,8 @@
         let devices = {};
         let otaInProgress = false;
         const chunkSize = 4096;
+        let messageHandlers = [];  // Store message handlers
 
-        // ──────────────── Device & Pump logic ────────────────
         function updateDeviceList() {
             const list = document.getElementById('deviceList');
             list.innerHTML = '';
@@ -327,6 +325,7 @@
             const el = document.getElementById('otaStatus');
             el.textContent = msg;
             el.className = 'ota-status ' + type;
+            console.log(`[OTA STATUS] ${msg}`);
         }
 
         function updateProgress(percent) {
@@ -350,9 +349,14 @@
             const totalSize = file.size;
             let offset = 0;
 
+            console.log(`[OTA] Starting upload: ${totalSize} bytes, chunk size: ${chunkSize}`);
+
             try {
                 while (offset < totalSize) {
-                    const chunk = file.slice(offset, offset + chunkSize);
+                    const end = Math.min(offset + chunkSize, totalSize);
+                    const chunk = file.slice(offset, end);
+                    const actualChunkSize = chunk.size;
+                    
                     const base64 = await new Promise(r => {
                         const reader = new FileReader();
                         reader.onload = () => r(reader.result.split(',')[1]);
@@ -364,127 +368,226 @@
                         params: { offset, total: totalSize, chunk: base64 }
                     });
 
-                    setOtaStatus(`Sending chunk ${offset} – ${offset + chunk.size}/${totalSize} bytes...`, 'waiting');
+                    console.log(`[OTA] Sending chunk at offset ${offset}, size ${actualChunkSize}`);
+                    setOtaStatus(`Uploading: ${offset} / ${totalSize} bytes (${Math.round(offset/totalSize*100)}%)`, 'waiting');
 
-                    await sendChunkAndWaitForAck(rxTopic, txTopic, payload, offset);
+                    await sendChunkAndWaitForAck(rxTopic, txTopic, payload, offset, actualChunkSize);
 
-                    offset += chunk.size;
+                    offset += actualChunkSize;
                     updateProgress((offset / totalSize) * 100);
+                    
+                    // Small delay between chunks
+                    await new Promise(r => setTimeout(r, 100));
                 }
 
-                setOtaStatus('Upload finished. Device should reboot and apply firmware.', 'success');
+                setOtaStatus('✅ Upload complete! Device will reboot in a few seconds...', 'success');
+                updateProgress(100);
             } catch (err) {
-                console.error('OTA error:', err);
-                setOtaStatus(`Upload failed: ${err.message}`, 'error');
+                console.error('[OTA ERROR]', err);
+                setOtaStatus(`❌ Upload failed: ${err.message}`, 'error');
             } finally {
                 otaInProgress = false;
                 document.getElementById('uploadBtn').disabled = false;
-                updateProgress(0);
+                setTimeout(() => updateProgress(0), 3000);
             }
         }
 
-        function sendChunkAndWaitForAck(rxTopic, txTopic, payload, currentOffset) {
+        function sendChunkAndWaitForAck(rxTopic, txTopic, payload, currentOffset, chunkSize) {
             return new Promise((resolve, reject) => {
                 let responded = false;
-                const timeoutMs = 40000;
+                const timeoutMs = 15000; // Reduced to 15 seconds
+
+                console.log(`[OTA] Waiting for ACK on topic: ${txTopic}`);
 
                 const timeoutId = setTimeout(() => {
                     if (!responded) {
                         responded = true;
-                        client.off('message', handler);
-                        reject(new Error(`No valid response after ${timeoutMs/1000}s (offset ${currentOffset})`));
+                        console.error(`[OTA TIMEOUT] No response after ${timeoutMs}ms for offset ${currentOffset}`);
+                        reject(new Error(`Timeout waiting for response (offset ${currentOffset})`));
                     }
                 }, timeoutMs);
 
-                const handler = (topic, message) => {
-                    if (topic !== txTopic) return;
+                // Create temporary message handler for this chunk
+                const tempHandler = (topic, message) => {
+                    if (topic !== txTopic || responded) return;
 
                     const raw = message.toString().trim();
-                    console.log(`[TX RAW received] ${raw}`);
-
-                    responded = true;
-                    clearTimeout(timeoutId);
-                    client.off('message', handler);
-
-                    setOtaStatus(`Received on tx: ${raw.slice(0, 120)}${raw.length > 120 ? '...' : ''}`, 'debug');
+                    console.log(`[OTA RX] 📨 Topic: ${topic}`);
+                    console.log(`[OTA RX] 📝 Raw message (first 300 chars): ${raw.substring(0, 300)}`);
 
                     try {
                         const json = JSON.parse(raw);
-                        console.log('[TX PARSED]', json);
-
+                        console.log(`[OTA] Parsed JSON:`, json);
+                        
+                        // Check multiple possible response formats
+                        let isOk = false;
+                        let receivedOffset = -1;
+                        let receivedWritten = -1;
+                        
+                        // Format 1: {"result":{"status":"ok",...}}
                         if (json.result && json.result.status === 'ok') {
-                            setOtaStatus(`Chunk accepted (offset ${currentOffset})`, 'success');
-                            resolve();
-                        } else if (json.error) {
-                            reject(new Error(json.error.message || 'Device reported error'));
-                        } else {
-                            reject(new Error('Response missing expected "result" or "ok" field'));
+                            isOk = true;
+                            receivedOffset = json.result.offset || currentOffset;
+                            receivedWritten = json.result.written || chunkSize;
+                            console.log(`[OTA] ✅ Matched Format 1: result.status=ok`);
+                        }
+                        // Format 2: {"id":X,"result":{"status":"ok",...}}
+                        else if (json.id !== undefined && json.result && json.result.status === 'ok') {
+                            isOk = true;
+                            receivedOffset = json.result.offset || currentOffset;
+                            receivedWritten = json.result.written || chunkSize;
+                            console.log(`[OTA] ✅ Matched Format 2: id + result.status=ok`);
+                        }
+                        // Format 3: Direct {"status":"ok",...}
+                        else if (json.status === 'ok' && json.offset !== undefined) {
+                            isOk = true;
+                            receivedOffset = json.offset;
+                            receivedWritten = json.written;
+                            console.log(`[OTA] ✅ Matched Format 3: direct status=ok`);
+                        }
+                        // Format 4: {"id":null,"result":"ok"} - Simple string result
+                        else if (json.result === 'ok' || json.result === 'true') {
+                            isOk = true;
+                            receivedOffset = currentOffset;
+                            receivedWritten = chunkSize;
+                            console.log(`[OTA] ✅ Matched Format 4: result="ok" (simple string)`);
+                        }
+                        else {
+                            console.warn(`[OTA] ⚠️ Response format not recognized`, json);
+                        }
+                        
+                        if (isOk) {
+                            responded = true;
+                            clearTimeout(timeoutId);
+                            
+                            console.log(`[OTA ACK] ✅ Chunk accepted: offset=${receivedOffset}, written=${receivedWritten}`);
+                            
+                            if (receivedOffset === currentOffset) {
+                                setOtaStatus(`✓ Chunk ${currentOffset} OK`, 'success');
+                                resolve();
+                            } else {
+                                console.warn(`[OTA] Offset mismatch: expected ${currentOffset}, got ${receivedOffset}`);
+                                resolve(); // Still resolve
+                            }
                         }
                     } catch (e) {
-                        console.warn('Failed to parse tx message as JSON:', raw);
-                        // Do not reject here — wait for timeout if needed
-                        setOtaStatus(`Invalid/non-JSON response received: ${raw.slice(0, 80)}...`, 'error');
+                        console.warn(`[OTA] Parse error: ${e.message}, raw:`, raw.substring(0, 100));
                     }
                 };
 
-                client.on('message', handler);
+                // Add handler temporarily
+                messageHandlers.push(tempHandler);
+                client.on('message', tempHandler);
 
-                console.log(`Publishing OTA chunk (offset ${currentOffset})`);
+                // Publish chunk
+                console.log(`[OTA TX] Publishing to ${rxTopic}, payload length: ${payload.length}`);
                 client.publish(rxTopic, payload, { qos: 1 }, (err) => {
                     if (err) {
                         clearTimeout(timeoutId);
-                        client.off('message', handler);
-                        reject(new Error('Publish failed: ' + err.message));
+                        client.off('message', tempHandler);
+                        const index = messageHandlers.indexOf(tempHandler);
+                        if (index > -1) messageHandlers.splice(index, 1);
+                        reject(new Error(`Publish failed: ${err.message}`));
+                    } else {
+                        console.log(`[OTA TX] Chunk published successfully`);
                     }
                 });
+
+                // Cleanup after resolve/reject
+                const originalResolve = resolve;
+                const originalReject = reject;
+                
+                resolve = (...args) => {
+                    client.off('message', tempHandler);
+                    const index = messageHandlers.indexOf(tempHandler);
+                    if (index > -1) messageHandlers.splice(index, 1);
+                    originalResolve(...args);
+                };
+                
+                reject = (...args) => {
+                    client.off('message', tempHandler);
+                    const index = messageHandlers.indexOf(tempHandler);
+                    if (index > -1) messageHandlers.splice(index, 1);
+                    originalReject(...args);
+                };
             });
         }
 
-        // ──────────────── MQTT Connection ────────────────
         function connect() {
+            console.log('[MQTT] Connecting to', brokerUrl);
             client = mqtt.connect(brokerUrl, options);
 
             client.on('connect', () => {
-                document.getElementById('connectionStatus').textContent = 'Connected';
+                console.log('[MQTT] Connected successfully');
+                document.getElementById('connectionStatus').textContent = '✅ Connected';
                 document.getElementById('connectionStatus').className = 'connection connected';
 
-                client.subscribe(`${prefix}/+/status`);
-                client.subscribe(`${prefix}/+/tx`);
+                // Subscribe to topics
+                const statusTopic = `${prefix}/+/status`;
+                const txTopic = `${prefix}/+/tx`;
+                
+                client.subscribe(statusTopic, { qos: 1 }, (err) => {
+                    if (err) {
+                        console.error('[MQTT] Failed to subscribe to status:', err);
+                    } else {
+                        console.log(`[MQTT] Subscribed to ${statusTopic}`);
+                    }
+                });
+                
+                client.subscribe(txTopic, { qos: 1 }, (err) => {
+                    if (err) {
+                        console.error('[MQTT] Failed to subscribe to tx:', err);
+                    } else {
+                        console.log(`[MQTT] Subscribed to ${txTopic}`);
+                    }
+                });
             });
 
             client.on('error', (err) => {
-                document.getElementById('connectionStatus').textContent = `Failed: ${err.message}`;
+                console.error('[MQTT ERROR]', err);
+                document.getElementById('connectionStatus').textContent = `❌ Failed: ${err.message}`;
                 document.getElementById('connectionStatus').className = 'connection disconnected';
             });
 
             client.on('close', () => {
-                document.getElementById('connectionStatus').textContent = 'Disconnected';
+                console.log('[MQTT] Connection closed');
+                document.getElementById('connectionStatus').textContent = '⚠️ Disconnected';
                 document.getElementById('connectionStatus').className = 'connection disconnected';
             });
 
             client.on('message', (topic, message) => {
                 const parts = topic.split('/');
+                
+                // Handle status messages
                 if (parts.length === 3 && parts[2] === 'status') {
                     const id = parts[1];
                     try {
                         const data = JSON.parse(message.toString());
+                        console.log(`[STATUS] Device ${id}:`, data);
+                        
                         if (data.method === 'status.notify' && data.params?.status === 'online') {
-                            devices[id] = { pump_status: !!data.params.pump_status };
+                            devices[id] = { 
+                                pump_status: !!data.params.pump_status,
+                                firmware: data.params.firmware_version || 'unknown'
+                            };
                             updateDeviceList();
                             if (id === selectedDevice) updatePumpStatus();
-                        } else {
+                        } else if (data.params?.status === 'offline') {
                             delete devices[id];
                             updateDeviceList();
                             if (id === selectedDevice) updatePumpStatus();
                         }
-                    } catch {}
+                    } catch (e) {
+                        console.error('[STATUS] Parse error:', e);
+                    }
                 }
-                // tx messages handled in OTA promise
+                // TX messages are handled by temporary OTA handlers
             });
         }
 
         document.getElementById('onBtn').addEventListener('click', () => {
             if (client?.connected && selectedDevice) {
+                console.log('[CONTROL] Sending PUMP ON');
                 client.publish(`${prefix}/${selectedDevice}/rx`, 'PUMP ON', { qos: 1 });
             } else {
                 alert('Not connected or no device selected');
@@ -493,6 +596,7 @@
 
         document.getElementById('offBtn').addEventListener('click', () => {
             if (client?.connected && selectedDevice) {
+                console.log('[CONTROL] Sending PUMP OFF');
                 client.publish(`${prefix}/${selectedDevice}/rx`, 'PUMP OFF', { qos: 1 });
             } else {
                 alert('Not connected or no device selected');
@@ -500,14 +604,22 @@
         });
 
         document.getElementById('firmwareFile').addEventListener('change', (e) => {
-            document.getElementById('uploadBtn').disabled = !e.target.files[0];
+            const hasFile = !!e.target.files[0];
+            document.getElementById('uploadBtn').disabled = !hasFile;
+            if (hasFile) {
+                console.log('[FILE] Selected:', e.target.files[0].name, e.target.files[0].size, 'bytes');
+            }
         });
 
         document.getElementById('uploadBtn').addEventListener('click', () => {
             const file = document.getElementById('firmwareFile').files[0];
-            if (file) uploadFirmware(file);
+            if (file) {
+                console.log('[OTA] Starting upload for file:', file.name);
+                uploadFirmware(file);
+            }
         });
 
+        // Start connection
         connect();
     </script>
 </body>
