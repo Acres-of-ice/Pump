@@ -1,0 +1,6 @@
+sdkconfig
+sdkconfig.old
+build*/
+.cache/
+images/
+version.txt
