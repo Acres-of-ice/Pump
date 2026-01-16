@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pump Controller • Scheduler</title>
+    <title>Pump Controller </title>
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
@@ -416,7 +416,7 @@
         </main>
     </div>
 
-    <script>
+    <>
         const brokerUrl = 'wss://broker.hivemq.com:8884/mqtt';
         const prefix = 'mg_mqtt_dashboard';
         const options = {
@@ -424,6 +424,11 @@
             connectTimeout: 5000,
             clientId: 'pump-controller-' + Math.random().toString(16).substr(2, 8),
         };
+
+        const VALID_SITES = [
+       "Shey",
+       "Office",
+];
 
         let client = null;
         let selectedDevice = null;
@@ -655,6 +660,6 @@
         }
 
         connect();
-    </script>
+    </>
 </body>
 </html>
