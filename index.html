@@ -452,7 +452,7 @@
 
         const brokerUrl = 'wss://broker.hivemq.com:8884/mqtt';
         const prefix = 'pump';
-        const TIMEOUT_MS = 60000; // 90 seconds
+        const TIMEOUT_MS = 10000; // 10 seconds
         const GRACE_PERIOD = 5000; // 5 second grace period on first load
         
         const options = {
@@ -853,7 +853,7 @@
                dashboardConnectTime = Date.now();
                devices = {};
                updateDeviceList();
-    
+               startTimeoutChecker();
                console.log('[MQTT] Connected, waiting for live heartbeats...');
             });
 
