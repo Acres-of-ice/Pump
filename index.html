@@ -859,21 +859,21 @@ client.on('message', (topic, message) => {
 });
         }
 
-        document.getElementById('onBtn').addEventListener('click', () => {
-            if (client?.connected && selectedDevice) {
-                client.publish(`${prefix}/${selectedDevice}/rx`, 'PUMP ON', { qos: 1 });
-            } else {
-                alert('Not connected or no device selected');
-            }
-        });
+        // document.getElementById('onBtn').addEventListener('click', () => {
+        //     if (client?.connected && selectedDevice) {
+        //         client.publish(`${prefix}/${selectedDevice}/rx`, 'PUMP ON', { qos: 1 });
+        //     } else {
+        //         alert('Not connected or no device selected');
+        //     }
+        // });
 
-        document.getElementById('offBtn').addEventListener('click', () => {
-            if (client?.connected && selectedDevice) {
-                client.publish(`${prefix}/${selectedDevice}/rx`, 'PUMP OFF', { qos: 1 });
-            } else {
-                alert('Not connected or no device selected');
-            }
-        });
+        // document.getElementById('offBtn').addEventListener('click', () => {
+        //     if (client?.connected && selectedDevice) {
+        //         client.publish(`${prefix}/${selectedDevice}/rx`, 'PUMP OFF', { qos: 1 });
+        //     } else {
+        //         alert('Not connected or no device selected');
+        //     }
+        // });
 
         document.getElementById('firmwareFile').addEventListener('change', (e) => {
             document.getElementById('uploadBtn').disabled = !e.target.files[0];
