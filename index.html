@@ -852,6 +852,7 @@
                 // ✅ Track when dashboard connected
                dashboardConnectTime = Date.now();
                devices = {};
+               await loadDeviceList();
                updateDeviceList();
                startTimeoutChecker();
                console.log('[MQTT] Connected, waiting for live heartbeats...');
@@ -892,7 +893,7 @@ client.on('message', (topic, message) => {
                         online: false
                     };
                 }
-                
+                saveDeviceList();
                 // Update device state
                 devices[id].pump_status = !!data.params?.pump_status;
                 devices[id].lastHeartbeat = now;
