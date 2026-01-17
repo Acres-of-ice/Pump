@@ -468,6 +468,28 @@
         let dashboardStartTime = Date.now();
         const chunkSize = 4096;
 
+                // Load saved devices from memory
+        const savedDevices = {};
+        
+        function saveDeviceList() {
+            const deviceNames = Object.keys(devices);
+            savedDevices.list = deviceNames;
+        }
+        
+        function loadDeviceList() {
+            if (savedDevices.list) {
+                savedDevices.list.forEach(deviceName => {
+                    if (!devices[deviceName]) {
+                        devices[deviceName] = {
+                            pump_status: false,
+                            lastHeartbeat: 0,
+                            online: false
+                        };
+                    }
+                });
+            }
+        }
+
         function switchTab(tabName) {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
