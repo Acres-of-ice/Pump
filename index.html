@@ -449,9 +449,10 @@
     </div>
 
     <script>
+
         const brokerUrl = 'wss://broker.hivemq.com:8884/mqtt';
         const prefix = 'pump';
-        const TIMEOUT_MS = 90000; // 90 seconds
+        const TIMEOUT_MS = 60000; // 90 seconds
         const GRACE_PERIOD = 5000; // 5 second grace period on first load
         
         const options = {
@@ -466,27 +467,40 @@
         let schedules = [];
         let timeoutChecker = null;
         let dashboardStartTime = Date.now();
+        let dashboardConnectTime = 0;
         const chunkSize = 4096;
-
-                // Load saved devices from memory
-        const savedDevices = {};
         
-        function saveDeviceList() {
-            const deviceNames = Object.keys(devices);
-            savedDevices.list = deviceNames;
+        // ✅ PERSISTENT STORAGE - Save devices permanently
+        async function saveDeviceList() {
+            try {
+                const deviceNames = Object.keys(devices);
+                await window.storage.set('known_devices', JSON.stringify(deviceNames), false);
+                console.log('[STORAGE] Saved devices:', deviceNames);
+            } catch (e) {
+                console.error('[STORAGE] Save failed:', e);
+            }
         }
         
-        function loadDeviceList() {
-            if (savedDevices.list) {
-                savedDevices.list.forEach(deviceName => {
-                    if (!devices[deviceName]) {
-                        devices[deviceName] = {
-                            pump_status: false,
-                            lastHeartbeat: 0,
-                            online: false
-                        };
-                    }
-                });
+        async function loadDeviceList() {
+            try {
+                const result = await window.storage.get('known_devices', false);
+                if (result && result.value) {
+                    const deviceNames = JSON.parse(result.value);
+                    console.log('[STORAGE] Loaded devices:', deviceNames);
+                    
+                    deviceNames.forEach(deviceName => {
+                        if (!devices[deviceName]) {
+                            devices[deviceName] = {
+                                pump_status: false,
+                                lastHeartbeat: 0,
+                                online: false
+                            };
+                        }
+                    });
+                    updateDeviceList();
+                }
+            } catch (e) {
+                console.log('[STORAGE] No saved devices or load failed:', e);
             }
         }
 
