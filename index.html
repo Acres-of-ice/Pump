@@ -813,6 +813,12 @@
 
                 client.subscribe(`${prefix}/+/status`);
                 client.subscribe(`${prefix}/+/tx`);
+                // ✅ Track when dashboard connected
+               dashboardConnectTime = Date.now();
+               devices = {};
+               updateDeviceList();
+    
+               console.log('[MQTT] Connected, waiting for live heartbeats...');
             });
 
             client.on('error', (err) => {
@@ -831,8 +837,17 @@ client.on('message', (topic, message) => {
         const id = parts[1];
         try {
             const data = JSON.parse(message.toString());
-            // ✅ FIX: Accept heartbeats regardless of "status" field
+            
             if (data.method === 'status.notify') {
+                const now = Date.now();
+                
+                // ✅ Ignore retained messages from before dashboard connected
+                // Only accept messages that arrive after 5 second grace period
+                if (now - dashboardConnectTime < 5000) {
+                    console.log(`[IGNORE] Skipping potential retained message from ${id} (grace period)`);
+                    return;
+                }
+                
                 // Initialize device if not exists
                 if (!devices[id]) {
                     devices[id] = {
@@ -844,10 +859,10 @@ client.on('message', (topic, message) => {
                 
                 // Update device state
                 devices[id].pump_status = !!data.params?.pump_status;
-                devices[id].lastHeartbeat = Date.now();
+                devices[id].lastHeartbeat = now;
                 devices[id].online = true;
                 
-                console.log(`[HEARTBEAT] ${id}: pump=${devices[id].pump_status}, time=${devices[id].lastHeartbeat}`);
+                console.log(`[HEARTBEAT] ${id}: pump=${devices[id].pump_status}, online=true`);
                 
                 updateDeviceList();
                 if (id === selectedDevice) updatePumpStatus();
