@@ -825,25 +825,38 @@
                 document.getElementById('connectionStatus').className = 'connection disconnected';
             });
 
-            client.on('message', (topic, message) => {
-                const parts = topic.split('/');
-                if (parts.length === 3 && parts[2] === 'status') {
-                    const id = parts[1];
-                    try {
-                        const data = JSON.parse(message.toString());
-                        if (data.method === 'status.notify' && data.params?.status === 'online') {
-                            devices[id] = { pump_status: !!data.params.pump_status };
-                            updateDeviceList();
-                            if (id === selectedDevice) updatePumpStatus();
-                        } else {
-                            delete devices[id];
-                            updateDeviceList();
-                            if (id === selectedDevice) updatePumpStatus();
-                        }
-                    } catch {}
+client.on('message', (topic, message) => {
+    const parts = topic.split('/');
+    if (parts.length === 3 && parts[2] === 'status') {
+        const id = parts[1];
+        try {
+            const data = JSON.parse(message.toString());
+            // ✅ FIX: Accept heartbeats regardless of "status" field
+            if (data.method === 'status.notify') {
+                // Initialize device if not exists
+                if (!devices[id]) {
+                    devices[id] = {
+                        pump_status: false,
+                        lastHeartbeat: 0,
+                        online: false
+                    };
                 }
-                // tx handled in OTA
-            });
+                
+                // Update device state
+                devices[id].pump_status = !!data.params?.pump_status;
+                devices[id].lastHeartbeat = Date.now();
+                devices[id].online = true;
+                
+                console.log(`[HEARTBEAT] ${id}: pump=${devices[id].pump_status}, time=${devices[id].lastHeartbeat}`);
+                
+                updateDeviceList();
+                if (id === selectedDevice) updatePumpStatus();
+            }
+        } catch (e) {
+            console.error('[PARSE ERROR]', e);
+        }
+    }
+});
         }
 
         document.getElementById('onBtn').addEventListener('click', () => {
