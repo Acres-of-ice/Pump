@@ -192,7 +192,6 @@
             color: var(--text-mute);
         }
         
-        /* Scheduler Styles */
         .scheduler-section {
             background: #f8fafc;
             border-radius: var(--radius);
@@ -308,39 +307,6 @@
             font-size: 0.875rem;
         }
         
-        .ota-section {
-            margin-top: 48px;
-            padding-top: 32px;
-            border-top: 1px solid var(--border);
-        }
-        .file-input {
-            padding: 12px;
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            background: var(--surface);
-            cursor: pointer;
-        }
-        .progress-bar {
-            height: 8px;
-            background: var(--border);
-            border-radius: 4px;
-            overflow: hidden;
-            margin: 16px 0;
-        }
-        .progress-fill {
-            height: 100%;
-            background: var(--success);
-            width: 0%;
-            transition: width 0.4s ease;
-        }
-        .ota-status {
-            font-size: 0.875rem;
-            min-height: 1.2em;
-        }
-        .ota-status.waiting { color: var(--warning); }
-        .ota-status.success { color: var(--success); }
-        .ota-status.error { color: var(--danger); }
-        
         @media (max-width: 960px) {
             .dashboard { grid-template-columns: 1fr; }
             .sidebar { order: -1; }
@@ -363,14 +329,11 @@
         <main class="main-panel">
             <div class="connection" id="connectionStatus">Connecting…</div>
 
-            <!-- Tabs -->
             <div class="tabs">
                 <button class="tab active" onclick="switchTab('control')">Manual Control</button>
                 <button class="tab" onclick="switchTab('scheduler')">Scheduler</button>
-                <button class="tab" onclick="switchTab('ota')">Firmware Update</button>
             </div>
 
-            <!-- Manual Control Tab -->
             <div id="tab-control" class="tab-content active">
                 <section class="control-section">
                     <div class="buttons">
@@ -384,7 +347,6 @@
                 </section>
             </div>
 
-            <!-- Scheduler Tab -->
             <div id="tab-scheduler" class="tab-content">
                 <div class="scheduler-section">
                     <div class="section-title">Create New Schedule</div>
@@ -429,25 +391,14 @@
                     <div id="schedulesList"></div>
                 </div>
             </div>
-
-            <!-- OTA Tab -->
-            <div id="tab-ota" class="tab-content">
-                <section class="ota-section">
-                    <div class="section-title">Firmware Update (OTA)</div>
-                    <input type="file" id="firmwareFile" accept=".bin" class="file-input">
-                    <button id="uploadBtn" class="btn btn-primary" disabled>Start OTA Upload</button>
-                    <div class="progress-bar">
-                        <div id="progressFill" class="progress-fill"></div>
-                    </div>
-                    <div id="otaStatus" class="ota-status"></div>
-                </section>
-            </div>
         </main>
     </div>
 
     <script>
         const brokerUrl = 'wss://broker.hivemq.com:8884/mqtt';
         const prefix = 'pump';
+        const TIMEOUT_MS = 60000; // 60 seconds 
+        
         const options = {
             clean: true,
             connectTimeout: 5000,
@@ -455,10 +406,10 @@
         };
 
         let client = null;
-        let selectedDevice = null;  // Auto-detect from MQTT
-        let devices = {};  // Format: { "Shey": { online: true, count: 3 } }
+        let selectedDevice = null;
+        let devices = {};
         let schedules = [];
-        const chunkSize = 4096;
+        let timeoutChecker = null;
 
         // Tab switching
         function switchTab(tabName) {
@@ -468,20 +419,46 @@
             document.getElementById('tab-' + tabName).classList.add('active');
         }
 
-        // Show/hide custom interval input
         document.getElementById('scheduleFrequency')?.addEventListener('change', function() {
             const customGroup = document.getElementById('customIntervalGroup');
             customGroup.style.display = this.value === 'custom' ? 'block' : 'none';
         });
 
-        // Device management
+        // ✅ Check for device timeouts every 10 seconds
+        function startTimeoutChecker() {
+            if (timeoutChecker) clearInterval(timeoutChecker);
+            
+            timeoutChecker = setInterval(() => {
+                const now = Date.now();
+                let changed = false;
+                
+                Object.keys(devices).forEach(deviceName => {
+                    const device = devices[deviceName];
+                    const timeSinceLastSeen = now - device.lastHeartbeat;
+                    
+                    // Mark offline if no heartbeat in TIMEOUT_MS
+                    if (device.online && timeSinceLastSeen > TIMEOUT_MS) {
+                        console.log(`[TIMEOUT] ${deviceName} offline (${timeSinceLastSeen}ms since last heartbeat)`);
+                        device.online = false;
+                        changed = true;
+                    }
+                });
+                
+                if (changed) {
+                    updateDeviceList();
+                    if (selectedDevice && devices[selectedDevice]) {
+                        updatePumpStatus();
+                    }
+                }
+            }, 10000); // Check every 10 seconds
+        }
+
         function updateDeviceList() {
             const list = document.getElementById('deviceList');
             list.innerHTML = '';
             
             const deviceIds = Object.keys(devices);
             
-            // Auto-select first device if none selected
             if (!selectedDevice && deviceIds.length > 0) {
                 selectedDevice = deviceIds[0];
                 console.log('[AUTO] Selected device:', selectedDevice);
@@ -492,12 +469,10 @@
                 const li = document.createElement('li');
                 li.className = 'device-item' + (id === selectedDevice ? ' active' : '');
                 
-                // Device name
                 const nameSpan = document.createElement('span');
                 nameSpan.className = 'device-name';
-                nameSpan.textContent = id + (device.count > 1 ? ` (${device.count})` : '');
+                nameSpan.textContent = id;
                 
-                // Online indicator
                 const indicator = document.createElement('span');
                 indicator.className = 'device-indicator ' + (device.online ? 'indicator-online' : 'indicator-offline');
                 indicator.title = device.online ? 'Online' : 'Offline';
@@ -508,7 +483,6 @@
                 list.appendChild(li);
             });
             
-            // Show message if no devices
             if (deviceIds.length === 0) {
                 list.innerHTML = '<p style="color: var(--text-mute); text-align: center; padding: 10px; font-size: 0.875rem;">No devices found</p>';
             }
@@ -524,16 +498,21 @@
         function updatePumpStatus() {
             const el = document.getElementById('pumpStatus');
             if (devices[selectedDevice]) {
-                const isOn = devices[selectedDevice].pump_status;
-                el.textContent = `Pump ${isOn ? 'ON' : 'OFF'}`;
-                el.className = 'pump-state ' + (isOn ? 'state-on' : 'state-off');
+                const device = devices[selectedDevice];
+                if (!device.online) {
+                    el.textContent = 'Device Offline';
+                    el.className = 'pump-state state-off';
+                } else {
+                    const isOn = device.pump_status;
+                    el.textContent = `Pump ${isOn ? 'ON' : 'OFF'}`;
+                    el.className = 'pump-state ' + (isOn ? 'state-on' : 'state-off');
+                }
             } else {
                 el.textContent = 'Pump OFF';
                 el.className = 'pump-state state-off';
             }
         }
 
-        // Scheduler functions
         function createSchedule() {
             if (!client?.connected || !selectedDevice) {
                 alert('Not connected or no device selected');
@@ -550,16 +529,9 @@
                 return;
             }
 
-            // Convert local time to UTC timestamp for device
-            // The datetime-local input gives us local time, we convert to UTC timestamp
             const localDate = new Date(startTime);
             const startTimestamp = Math.floor(localDate.getTime() / 1000);
             
-            console.log('[SCHEDULE] Local time:', startTime);
-            console.log('[SCHEDULE] UTC timestamp:', startTimestamp);
-            console.log('[SCHEDULE] Will execute at:', new Date(startTimestamp * 1000).toLocaleString());
-            
-            // Calculate interval in seconds
             let intervalSeconds = 0;
             switch(frequency) {
                 case 'once': intervalSeconds = 0; break;
@@ -572,12 +544,11 @@
             const schedule = {
                 id: Date.now(),
                 start: startTimestamp,
-                duration: duration * 60, // Convert to seconds
+                duration: duration * 60,
                 interval: intervalSeconds,
                 enabled: true
             };
 
-            // Send to device
             const command = JSON.stringify({
                 method: "schedule.add",
                 params: schedule
@@ -586,11 +557,9 @@
             console.log('[SCHEDULE] Creating:', schedule);
             client.publish(`${prefix}/${selectedDevice}/rx`, command, { qos: 1 });
             
-            // Add to local list
             schedules.push(schedule);
             renderSchedules();
             
-            // Clear form
             document.getElementById('scheduleStart').value = '';
             document.getElementById('scheduleDuration').value = '60';
         }
@@ -624,6 +593,7 @@
         }
 
         function loadSchedules() {
+            if (!client?.connected || !selectedDevice) return;
             const command = JSON.stringify({ method: "schedule.list" });
             client.publish(`${prefix}/${selectedDevice}/rx`, command, { qos: 1 });
         }
@@ -636,7 +606,6 @@
             }
 
             container.innerHTML = schedules.map(s => {
-                // Convert UTC timestamp back to local time for display
                 const startDate = new Date(s.start * 1000);
                 const durationHours = Math.floor(s.duration / 3600);
                 const durationMins = Math.floor((s.duration % 3600) / 60);
@@ -648,7 +617,6 @@
                 else if (s.interval === 604800) frequencyStr = 'Weekly';
                 else if (s.interval > 0) frequencyStr = `Every ${s.interval / 3600}h`;
                 
-                // Show in user's local timezone
                 const displayTime = startDate.toLocaleString(undefined, {
                     year: 'numeric',
                     month: 'short',
@@ -679,7 +647,6 @@
             }).join('');
         }
 
-        // Manual control
         document.getElementById('onBtn').addEventListener('click', () => {
             if (client?.connected && selectedDevice) {
                 client.publish(`${prefix}/${selectedDevice}/rx`, 'PUMP ON', { qos: 1 });
@@ -692,59 +659,47 @@
             }
         });
 
-        // MQTT Connection (simplified - OTA code removed for brevity)
         function connect() {
             client = mqtt.connect(brokerUrl, options);
 
             client.on('connect', () => {
-                document.getElementById('connectionStatus').textContent = '✅ Connected';
+                document.getElementById('connectionStatus').textContent = '✅ Connected to MQTT';
                 document.getElementById('connectionStatus').className = 'connection connected';
                 client.subscribe(`${prefix}/+/status`, { qos: 1 });
                 client.subscribe(`${prefix}/+/tx`, { qos: 1 });
+                console.log('[MQTT] Connected and subscribed');
+                
+                // Start timeout checker
+                startTimeoutChecker();
             });
 
             client.on('message', (topic, message) => {
                 const parts = topic.split('/');
                 if (parts[2] === 'status') {
-                    const deviceName = parts[1];  // e.g., "Shey"
+                    const deviceName = parts[1];
                     try {
                         const data = JSON.parse(message.toString());
                         
                         if (data.method === 'status.notify') {
                             const isOnline = data.params?.status === 'online';
                             
-                            // Initialize device if not exists
                             if (!devices[deviceName]) {
                                 devices[deviceName] = {
                                     online: false,
-                                    count: 0,
                                     pump_status: false,
-                                    lastSeen: {}
+                                    lastHeartbeat: 0
                                 };
                             }
                             
-                            // Track this specific board (could be multiple Shey boards)
-                            const boardId = message._timestamp || Date.now();  // Unique per board
-                            devices[deviceName].lastSeen[boardId] = Date.now();
+                            // ✅ Update last heartbeat timestamp
+                            devices[deviceName].lastHeartbeat = Date.now();
+                            devices[deviceName].online = isOnline;
                             
-                            // Update status
                             if (isOnline) {
-                                devices[deviceName].online = true;
                                 devices[deviceName].pump_status = !!data.params.pump_status;
-                            }
-                            
-                            // Count online boards (remove stale ones)
-                            const now = Date.now();
-                            Object.keys(devices[deviceName].lastSeen).forEach(bid => {
-                                if (now - devices[deviceName].lastSeen[bid] > 30000) {
-                                    delete devices[deviceName].lastSeen[bid];
-                                }
-                            });
-                            devices[deviceName].count = Object.keys(devices[deviceName].lastSeen).length;
-                            
-                            // Mark offline if no recent messages from any board
-                            if (devices[deviceName].count === 0) {
-                                devices[deviceName].online = false;
+                                console.log(`[HEARTBEAT] ${deviceName} online, pump=${devices[deviceName].pump_status}`);
+                            } else {
+                                console.log(`[LWT] ${deviceName} went offline`);
                             }
                             
                             updateDeviceList();
@@ -763,15 +718,24 @@
                     } catch (e) {}
                 }
             });
+
+            client.on('error', (err) => {
+                console.error('[MQTT] Error:', err);
+                document.getElementById('connectionStatus').textContent = '❌ Connection Error';
+                document.getElementById('connectionStatus').className = 'connection disconnected';
+            });
+
+            client.on('close', () => {
+                console.log('[MQTT] Disconnected');
+                document.getElementById('connectionStatus').textContent = '⚠️ Disconnected';
+                document.getElementById('connectionStatus').className = 'connection disconnected';
+            });
         }
 
-        // Initialize
         window.onload = function() {
-            // Display user's timezone
             const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
             document.getElementById('userTimezone').textContent = timezone;
             
-            // Set minimum datetime to now
             const now = new Date();
             now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
             document.getElementById('scheduleStart').min = now.toISOString().slice(0, 16);
