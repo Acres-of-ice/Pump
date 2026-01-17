@@ -76,11 +76,36 @@
             transition: background 0.15s;
             font-weight: 500;
             color: var(--text);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
         .device-item:hover { background: #f1f5f9; }
         .device-item.active {
             background: var(--accent);
             color: white;
+        }
+        .device-name {
+            flex: 1;
+        }
+        .device-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-left: 8px;
+            flex-shrink: 0;
+        }
+        .indicator-online {
+            background: var(--success);
+            box-shadow: 0 0 8px var(--success);
+            animation: pulse-green 2s infinite;
+        }
+        .indicator-offline {
+            background: var(--danger);
+        }
+        @keyframes pulse-green {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
         }
         .main-panel {
             background: var(--surface);
@@ -431,7 +456,7 @@
 
         let client = null;
         let selectedDevice = null;  // Auto-detect from MQTT
-        let devices = {};
+        let devices = {};  // Format: { "Shey": { online: true, count: 3 } }
         let schedules = [];
         const chunkSize = 4096;
 
@@ -463,16 +488,29 @@
             }
             
             deviceIds.forEach(id => {
+                const device = devices[id];
                 const li = document.createElement('li');
                 li.className = 'device-item' + (id === selectedDevice ? ' active' : '');
-                li.textContent = id;
+                
+                // Device name
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'device-name';
+                nameSpan.textContent = id + (device.count > 1 ? ` (${device.count})` : '');
+                
+                // Online indicator
+                const indicator = document.createElement('span');
+                indicator.className = 'device-indicator ' + (device.online ? 'indicator-online' : 'indicator-offline');
+                indicator.title = device.online ? 'Online' : 'Offline';
+                
+                li.appendChild(nameSpan);
+                li.appendChild(indicator);
                 li.onclick = () => selectDevice(id);
                 list.appendChild(li);
             });
             
             // Show message if no devices
             if (deviceIds.length === 0) {
-                list.innerHTML = '<p style="color: var(--text-mute); text-align: center; padding: 10px; font-size: 0.875rem;">No devices online</p>';
+                list.innerHTML = '<p style="color: var(--text-mute); text-align: center; padding: 10px; font-size: 0.875rem;">No devices found</p>';
             }
         }
 
@@ -668,15 +706,53 @@
             client.on('message', (topic, message) => {
                 const parts = topic.split('/');
                 if (parts[2] === 'status') {
-                    const id = parts[1];
+                    const deviceName = parts[1];  // e.g., "Shey"
                     try {
                         const data = JSON.parse(message.toString());
-                        if (data.method === 'status.notify' && data.params?.status === 'online') {
-                            devices[id] = { pump_status: !!data.params.pump_status };
+                        
+                        if (data.method === 'status.notify') {
+                            const isOnline = data.params?.status === 'online';
+                            
+                            // Initialize device if not exists
+                            if (!devices[deviceName]) {
+                                devices[deviceName] = {
+                                    online: false,
+                                    count: 0,
+                                    pump_status: false,
+                                    lastSeen: {}
+                                };
+                            }
+                            
+                            // Track this specific board (could be multiple Shey boards)
+                            const boardId = message._timestamp || Date.now();  // Unique per board
+                            devices[deviceName].lastSeen[boardId] = Date.now();
+                            
+                            // Update status
+                            if (isOnline) {
+                                devices[deviceName].online = true;
+                                devices[deviceName].pump_status = !!data.params.pump_status;
+                            }
+                            
+                            // Count online boards (remove stale ones)
+                            const now = Date.now();
+                            Object.keys(devices[deviceName].lastSeen).forEach(bid => {
+                                if (now - devices[deviceName].lastSeen[bid] > 30000) {
+                                    delete devices[deviceName].lastSeen[bid];
+                                }
+                            });
+                            devices[deviceName].count = Object.keys(devices[deviceName].lastSeen).length;
+                            
+                            // Mark offline if no recent messages from any board
+                            if (devices[deviceName].count === 0) {
+                                devices[deviceName].online = false;
+                            }
+                            
                             updateDeviceList();
-                            if (id === selectedDevice) updatePumpStatus();
+                            if (deviceName === selectedDevice) updatePumpStatus();
                         }
-                    } catch (e) {}
+                    } catch (e) {
+                        console.error('[MQTT] Parse error:', e);
+                    }
                 } else if (parts[2] === 'tx') {
                     try {
                         const data = JSON.parse(message.toString());
