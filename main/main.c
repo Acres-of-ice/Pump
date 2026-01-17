@@ -20,6 +20,11 @@
 
 #include "sim.h"
 
+#include "esp_timer.h"
+#include "esp_sntp.h"
+#include <time.h>
+#include <sys/time.h>
+
 #define WIFI_SSID "Acres of Ice"
 #define WIFI_PASS "UkDfPNEj5@"
 
@@ -28,8 +33,8 @@ static bool s_ota_active = false;
 
 #define LED_GPIO GPIO_NUM_8
 
-#define PUMP_ON_GPIO  GPIO_NUM_12    
-#define PUMP_OFF_GPIO GPIO_NUM_13   
+#define PUMP_ON_GPIO  GPIO_NUM_39    
+#define PUMP_OFF_GPIO GPIO_NUM_41   
 
 
 static const char *TAG = "PUMP";
@@ -37,19 +42,24 @@ static const char *TAG = "PUMP";
 
 extern void wifi_init(const char *ssid, const char *pass);
 
+static esp_timer_handle_t s_heartbeat_timer = NULL;
+
 #define TLS_CA ""
 #define FIRMWARE_VERSION "1.0.2"
 
 static struct mg_rpc *s_rpc = NULL;
 static uint8_t s_qos = 1;
 static char s_device_id[40];
-#define DEVICE_ID "Shey"
-static const char *s_topic_prefix = "mg_mqtt_dashboard";
+
+#define DEVICE_ID CONFIG_SITE_NAME
+static const char *s_topic_prefix = "pump";
 
 static esp_ota_handle_t s_ota_handle = 0;
 static bool s_ota_in_progress = false;
 
 static struct mg_connection *s_mqtt_conn = NULL;
+
+static struct mg_connection *s_mqtt_connection = NULL;
 
 struct device_state {
   bool pump_status;            // true = ON, false = OFF
@@ -57,19 +67,26 @@ struct device_state {
 };
 static struct device_state s_device_state = {false, FIRMWARE_VERSION};
 
-// struct device_state {
-//   bool led_status;
-//   char firmware_version[20];
-// };
-// static struct device_state s_device_state = {false, FIRMWARE_VERSION};
+// Scheduler structures
+#define MAX_SCHEDULES 10
 
-// static char *make_topic_name(char *buf, size_t len, const char *suffix) {
-//   if (s_device_id[0] == '\0') {
-//     mg_snprintf(s_device_id, sizeof(s_device_id), "device_%llu", mg_now());
-//   }
-//   mg_snprintf(buf, len, "%s/%s/%s", s_topic_prefix, s_device_id, suffix);
-//   return buf;
-// }
+typedef struct {
+  uint32_t id;           // Unique schedule ID
+  int64_t start_time;    // Unix timestamp (seconds)
+  uint32_t duration;     // Duration in seconds
+  uint32_t interval;     // Repeat interval in seconds (0 = one-time)
+  bool enabled;          // Is schedule active?
+  int64_t last_run;      // Last execution time
+} pump_schedule_t;
+
+static pump_schedule_t s_schedules[MAX_SCHEDULES];
+static int s_schedule_count = 0;
+static esp_timer_handle_t s_scheduler_timer = NULL;
+
+
+static void scheduler_check_callback(void *arg);
+static void pump_turn_on(uint32_t duration_seconds);
+static void pump_turn_off_callback(void *arg);
 
 
 static char *make_topic_name(char *buf, size_t len, const char *suffix) {
@@ -77,6 +94,310 @@ static char *make_topic_name(char *buf, size_t len, const char *suffix) {
   mg_snprintf(buf, len, "%s/%s/%s", s_topic_prefix, DEVICE_ID, suffix);
   return buf;
 }
+
+
+static void publish_status(struct mg_connection *c) {
+  char topic[100];
+  char json[256];
+  struct mg_mqtt_opts pub_opts;
+  
+  snprintf(json, sizeof(json),
+    "{\"method\":\"status.notify\",\"params\":{\"status\":\"online\","
+    "\"pump_status\":%s,\"firmware_version\":\"%s\"}}",
+    s_device_state.pump_status ? "true" : "false", 
+    s_device_state.firmware_version);
+
+  memset(&pub_opts, 0, sizeof(pub_opts));
+  pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "status"));
+  pub_opts.message = mg_str(json);
+  pub_opts.qos = s_qos;
+  pub_opts.retain = false;  // ✅ CHANGE: Don't retain heartbeats
+  mg_mqtt_pub(c, &pub_opts);
+}
+
+
+// Get current Unix timestamp
+static int64_t get_current_timestamp(void) {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return (int64_t)tv.tv_sec;
+}
+
+// Turn pump ON for a specific duration
+static void pump_turn_on(uint32_t duration_seconds) {
+  printf("🟢 Scheduler: Turning pump ON for %lu seconds\n", duration_seconds);
+  
+  s_device_state.pump_status = true;
+  gpio_set_level(PUMP_ON_GPIO, 1);
+  gpio_set_level(PUMP_OFF_GPIO, 0);
+
+  vTaskDelay(pdMS_TO_TICKS(5000));
+
+  gpio_set_level(PUMP_ON_GPIO, 0);
+  gpio_set_level(PUMP_OFF_GPIO, 0);
+
+  
+  // Publish status update
+  if (s_mqtt_connection) {
+    publish_status(s_mqtt_connection);
+  }
+  
+  // Create one-shot timer to turn OFF after duration
+  esp_timer_handle_t off_timer;
+  esp_timer_create_args_t off_timer_args = {
+    .callback = &pump_turn_off_callback,
+    .arg = NULL,
+    .name = "pump_off"
+  };
+  
+  esp_timer_create(&off_timer_args, &off_timer);
+  esp_timer_start_once(off_timer, duration_seconds * 1000000ULL);
+}
+
+// Timer callback to turn pump OFF
+static void pump_turn_off_callback(void *arg) {
+  printf("🔴 Scheduler: Turning pump OFF (duration expired)\n");
+  
+  s_device_state.pump_status = false;
+  gpio_set_level(PUMP_ON_GPIO, 0);
+  gpio_set_level(PUMP_OFF_GPIO, 1);
+  
+  vTaskDelay(pdMS_TO_TICKS(5000));
+
+  gpio_set_level(PUMP_ON_GPIO, 0);
+  gpio_set_level(PUMP_OFF_GPIO, 0);
+  // Publish status update
+  if (s_mqtt_connection) {
+    publish_status(s_mqtt_connection);
+  }
+}
+
+// Check all schedules and execute if needed
+static void scheduler_check_callback(void *arg) {
+  int64_t now = get_current_timestamp();
+  
+  for (int i = 0; i < s_schedule_count; i++) {
+    pump_schedule_t *sched = &s_schedules[i];
+    
+    if (!sched->enabled) continue;
+    
+    // Check if it's time to run this schedule
+    bool should_run = false;
+    
+    if (sched->interval == 0) {
+      // One-time schedule
+      if (now >= sched->start_time && sched->last_run == 0) {
+        should_run = true;
+      }
+    } else {
+      // Recurring schedule
+      if (now >= sched->start_time) {
+        int64_t time_since_last = now - sched->last_run;
+        
+        if (sched->last_run == 0 || time_since_last >= sched->interval) {
+          should_run = true;
+        }
+      }
+    }
+    
+    if (should_run) {
+      printf("⏰ Executing schedule ID %lu\n", sched->id);
+      sched->last_run = now;
+      pump_turn_on(sched->duration);
+      
+      // Disable one-time schedules after execution
+      if (sched->interval == 0) {
+        sched->enabled = false;
+      }
+    }
+  }
+}
+
+// Initialize scheduler
+static void scheduler_init(void) {
+  // Create periodic timer that checks every 10 seconds
+  esp_timer_create_args_t timer_args = {
+    .callback = &scheduler_check_callback,
+    .arg = NULL,
+    .name = "scheduler"
+  };
+  
+  esp_timer_create(&timer_args, &s_scheduler_timer);
+  esp_timer_start_periodic(s_scheduler_timer, 10 * 1000000); // 10 seconds
+  
+  printf("📅 Scheduler initialized\n");
+}
+
+// Add a new schedule
+static void rpc_schedule_add(struct mg_rpc_req *r) {
+  if (s_schedule_count >= MAX_SCHEDULES) {
+    char response[128];
+    snprintf(response, sizeof(response), "{\"id\":null,\"error\":\"Maximum schedules reached\"}");
+    
+    if (s_mqtt_connection) {
+      char topic[100];
+      struct mg_mqtt_opts pub_opts;
+      memset(&pub_opts, 0, sizeof(pub_opts));
+      pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
+      pub_opts.message = mg_str(response);
+      pub_opts.qos = 1;
+      mg_mqtt_pub(s_mqtt_connection, &pub_opts);
+    }
+    return;
+  }
+  
+  pump_schedule_t *sched = &s_schedules[s_schedule_count];
+  
+  sched->id = mg_json_get_long(r->frame, "$.params.id", 0);
+  sched->start_time = mg_json_get_long(r->frame, "$.params.start", 0);
+  sched->duration = mg_json_get_long(r->frame, "$.params.duration", 0);
+  sched->interval = mg_json_get_long(r->frame, "$.params.interval", 0);
+  mg_json_get_bool(r->frame, "$.params.enabled", &sched->enabled);
+  sched->last_run = 0;
+  
+  s_schedule_count++;
+  
+  printf("📅 Added schedule: ID=%lu, Start=%lld, Duration=%lu, Interval=%lu\n",
+         sched->id, sched->start_time, sched->duration, sched->interval);
+  
+  // Send success response
+  char response[128];
+  snprintf(response, sizeof(response), "{\"id\":null,\"result\":\"ok\"}");
+  
+  if (s_mqtt_connection) {
+    char topic[100];
+    struct mg_mqtt_opts pub_opts;
+    memset(&pub_opts, 0, sizeof(pub_opts));
+    pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
+    pub_opts.message = mg_str(response);
+    pub_opts.qos = 1;
+    mg_mqtt_pub(s_mqtt_connection, &pub_opts);
+  }
+}
+
+// Delete a schedule
+static void rpc_schedule_delete(struct mg_rpc_req *r) {
+  uint32_t id = mg_json_get_long(r->frame, "$.params.id", 0);
+  
+  for (int i = 0; i < s_schedule_count; i++) {
+    if (s_schedules[i].id == id) {
+      // Shift remaining schedules
+      for (int j = i; j < s_schedule_count - 1; j++) {
+        s_schedules[j] = s_schedules[j + 1];
+      }
+      s_schedule_count--;
+      
+      printf("🗑️ Deleted schedule ID %lu\n", id);
+      
+      // Send response
+      char response[128];
+      snprintf(response, sizeof(response), "{\"id\":null,\"result\":\"ok\"}");
+      
+      if (s_mqtt_connection) {
+        char topic[100];
+        struct mg_mqtt_opts pub_opts;
+        memset(&pub_opts, 0, sizeof(pub_opts));
+        pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
+        pub_opts.message = mg_str(response);
+        pub_opts.qos = 1;
+        mg_mqtt_pub(s_mqtt_connection, &pub_opts);
+      }
+      return;
+    }
+  }
+  
+  // Not found
+  char response[128];
+  snprintf(response, sizeof(response), "{\"id\":null,\"error\":\"Schedule not found\"}");
+  
+  if (s_mqtt_connection) {
+    char topic[100];
+    struct mg_mqtt_opts pub_opts;
+    memset(&pub_opts, 0, sizeof(pub_opts));
+    pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
+    pub_opts.message = mg_str(response);
+    pub_opts.qos = 1;
+    mg_mqtt_pub(s_mqtt_connection, &pub_opts);
+  }
+}
+
+// Toggle schedule enabled/disabled
+static void rpc_schedule_toggle(struct mg_rpc_req *r) {
+  uint32_t id = mg_json_get_long(r->frame, "$.params.id", 0);
+  bool enabled = false;
+  mg_json_get_bool(r->frame, "$.params.enabled", &enabled);
+  
+  for (int i = 0; i < s_schedule_count; i++) {
+    if (s_schedules[i].id == id) {
+      s_schedules[i].enabled = enabled;
+      printf("🔄 Schedule ID %lu %s\n", id, enabled ? "enabled" : "disabled");
+      
+      // Send response
+      char response[128];
+      snprintf(response, sizeof(response), "{\"id\":null,\"result\":\"ok\"}");
+      
+      if (s_mqtt_connection) {
+        char topic[100];
+        struct mg_mqtt_opts pub_opts;
+        memset(&pub_opts, 0, sizeof(pub_opts));
+        pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
+        pub_opts.message = mg_str(response);
+        pub_opts.qos = 1;
+        mg_mqtt_pub(s_mqtt_connection, &pub_opts);
+      }
+      return;
+    }
+  }
+  
+  // Not found
+  char response[128];
+  snprintf(response, sizeof(response), "{\"id\":null,\"error\":\"Schedule not found\"}");
+  
+  if (s_mqtt_connection) {
+    char topic[100];
+    struct mg_mqtt_opts pub_opts;
+    memset(&pub_opts, 0, sizeof(pub_opts));
+    pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
+    pub_opts.message = mg_str(response);
+    pub_opts.qos = 1;
+    mg_mqtt_pub(s_mqtt_connection, &pub_opts);
+  }
+}
+
+// List all schedules
+static void rpc_schedule_list(struct mg_rpc_req *r) {
+  char json[1024];
+  int offset = 0;
+  
+  offset += snprintf(json + offset, sizeof(json) - offset,
+                     "{\"id\":null,\"result\":{\"schedules\":[");
+  
+  for (int i = 0; i < s_schedule_count; i++) {
+    pump_schedule_t *s = &s_schedules[i];
+    offset += snprintf(json + offset, sizeof(json) - offset,
+                       "%s{\"id\":%lu,\"start\":%lld,\"duration\":%lu,"
+                       "\"interval\":%lu,\"enabled\":%s,\"last_run\":%lld}",
+                       i > 0 ? "," : "",
+                       s->id, s->start_time, s->duration,
+                       s->interval, s->enabled ? "true" : "false",
+                       s->last_run);
+  }
+  
+  offset += snprintf(json + offset, sizeof(json) - offset, "]}}");
+  
+  printf("📋 Listing %d schedules\n", s_schedule_count);
+  
+  if (s_mqtt_connection) {
+    char topic[100];
+    struct mg_mqtt_opts pub_opts;
+    memset(&pub_opts, 0, sizeof(pub_opts));
+    pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
+    pub_opts.message = mg_str_n(json, offset);
+    pub_opts.qos = 1;
+    mg_mqtt_pub(s_mqtt_connection, &pub_opts);
+  }
+}
+
 
 static void publish_response(struct mg_connection *c, char *buf, size_t len) {
   struct mg_mqtt_opts pub_opts;
@@ -88,60 +409,51 @@ static void publish_response(struct mg_connection *c, char *buf, size_t len) {
   mg_mqtt_pub(c, &pub_opts);
 }
 
-// FIXED: Manual JSON without mg_xprintf
-static void publish_status(struct mg_connection *c) {
-  char topic[100];
-  char json[256];
-  struct mg_mqtt_opts pub_opts;
-  
-  // Manual JSON formatting (safe, no mg_xprintf)
-  snprintf(json, sizeof(json),
-    "{\"method\":\"status.notify\",\"params\":{\"status\":\"online\","
-    "\"pump_status\":%s,\"firmware_version\":\"%s\"}}",
-    s_device_state.pump_status ? "true" : "false", 
-    s_device_state.firmware_version);
 
-  memset(&pub_opts, 0, sizeof(pub_opts));
-  pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "status"));
-  pub_opts.message = mg_str(json);
-  pub_opts.qos = s_qos;
-  pub_opts.retain = true;
-  mg_mqtt_pub(c, &pub_opts);
-}
 
-static void rpc_state_set(struct mg_rpc_req *r) {
-  // Access mg_str directly using .buf and .len (standard Mongoose)
-  char msg[128];
-  int copy_len = (r->frame.len < sizeof(msg) - 1) ? r->frame.len : sizeof(msg) - 1;
-  memcpy(msg, r->frame.buf, copy_len);  // Use .buf not .ptr
-  msg[copy_len] = '\0';
+// static void rpc_state_set(struct mg_rpc_req *r) {
+//   // Access mg_str directly using .buf and .len (standard Mongoose)
+//   char msg[128];
+//   int copy_len = (r->frame.len < sizeof(msg) - 1) ? r->frame.len : sizeof(msg) - 1;
+//   memcpy(msg, r->frame.buf, copy_len);  // Use .buf not .ptr
+//   msg[copy_len] = '\0';
   
-  printf("MQTT RX: %s\n", msg);
+//   printf("MQTT RX: %s\n", msg);
   
-  // Standard C string matching
-  if (strstr(msg, "PUMP ON") != NULL) {
-    printf("🚿 PUMP ON - GPIO42:1 GPIO43:0\n");
-    s_device_state.pump_status = true;
-    gpio_set_level(PUMP_ON_GPIO, 1);
-    gpio_set_level(PUMP_OFF_GPIO, 0);
+//   // Standard C string matching
+//   if (strstr(msg, "PUMP ON") != NULL) {
+//     printf("🚿 PUMP ON - GPIO42:1 GPIO43:0\n");
+//     s_device_state.pump_status = true;
+//   gpio_set_level(PUMP_ON_GPIO, 1);
+//   gpio_set_level(PUMP_OFF_GPIO, 0);
+  
+//   vTaskDelay(pdMS_TO_TICKS(5000));
+
+//   gpio_set_level(PUMP_ON_GPIO, 0);
+//   gpio_set_level(PUMP_OFF_GPIO, 0);
     
-    // ✅ VERIFY GPIO STATES
-    printf("GPIO42: %d, GPIO43: %d\n", gpio_get_level(PUMP_ON_GPIO), gpio_get_level(PUMP_OFF_GPIO));
+//     // ✅ VERIFY GPIO STATES
+//     printf("GPIO40: %d, GPIO41: %d\n", gpio_get_level(PUMP_ON_GPIO), gpio_get_level(PUMP_OFF_GPIO));
     
-    mg_rpc_ok(r, "PUMP ON");
+//     mg_rpc_ok(r, "PUMP ON");
     
-  } else if (strstr(msg, "PUMP OFF") != NULL) {
-    printf("⏹️ PUMP OFF - GPIO42:0 GPIO43:1\n");
-    s_device_state.pump_status = false;
-    gpio_set_level(PUMP_ON_GPIO, 0);
-    gpio_set_level(PUMP_OFF_GPIO, 1);
+//   } else if (strstr(msg, "PUMP OFF") != NULL) {
+//     printf("⏹️ PUMP OFF - GPIO42:0 GPIO43:1\n");
+//     s_device_state.pump_status = false;
+//    gpio_set_level(PUMP_ON_GPIO, 0);
+//    gpio_set_level(PUMP_OFF_GPIO, 1);
+  
+//    vTaskDelay(pdMS_TO_TICKS(5000));
+
+//    gpio_set_level(PUMP_ON_GPIO, 0);
+//    gpio_set_level(PUMP_OFF_GPIO, 0);
     
-    // ✅ VERIFY GPIO STATES
-    printf("GPIO42: %d, GPIO43: %d\n", gpio_get_level(PUMP_ON_GPIO), gpio_get_level(PUMP_OFF_GPIO));
-    }else {
-    mg_rpc_err(r, 2, "Commands: PUMP ON | PUMP OFF");
-  }
-}
+//     // ✅ VERIFY GPIO STATES
+//     printf("GPIO40: %d, GPIO41: %d\n", gpio_get_level(PUMP_ON_GPIO), gpio_get_level(PUMP_OFF_GPIO));
+//     }else {
+//     mg_rpc_err(r, 2, "Commands: PUMP ON | PUMP OFF");
+//   }
+// }
 
 // static void rpc_state_get(struct mg_rpc_req *r) {
 //   char json[128];
@@ -152,7 +464,7 @@ static void rpc_state_set(struct mg_rpc_req *r) {
 // }
 
 
-static struct mg_connection *s_mqtt_connection = NULL;
+
 
 static void rpc_ota_upload(struct mg_rpc_req *r) {
   long ofs = mg_json_get_long(r->frame, "$.params.offset", -1);
@@ -250,20 +562,7 @@ void my_mqtt_on_connect(struct mg_connection *c, int code) {
   printf("MQTT Connected! Visit https://mongoose.ws/mqtt-dashboard/\n");
 }
 
-// void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_str data) {
-//   struct mg_iobuf io = {0, 0, 0, 512};
-//   struct mg_rpc_req r = {&s_rpc, NULL, mg_pfn_iobuf, &io, NULL, {data.buf, data.len}};
-//   size_t clipped_len = data.len > 512 ? 512 : data.len;
-  
-//   printf("MQTT RX: %.*s <- %.*s\n", (int)topic.len, topic.buf, (int)clipped_len, data.buf);
-  
-//   mg_rpc_process(&r);
-//   if (io.buf && io.len > 0) {
-//     publish_response(c, (char *) io.buf, io.len);
-//     publish_status(c);
-//   }
-//   mg_iobuf_free(&io);
-// }
+
 
 void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_str data) {
   char msg[512];  // Increased size for OTA messages
@@ -281,9 +580,14 @@ void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_
   if (strstr(msg, "PUMP ON") != NULL) {
     printf("✅ PUMP ON TRIGGERED!\n");
     s_device_state.pump_status = true;
-    gpio_set_level(PUMP_ON_GPIO, 1);
-    gpio_set_level(PUMP_OFF_GPIO, 0);
-    printf("GPIO12=%d GPIO13=%d\n", gpio_get_level(PUMP_ON_GPIO), gpio_get_level(PUMP_OFF_GPIO));
+  gpio_set_level(PUMP_ON_GPIO, 1);
+  gpio_set_level(PUMP_OFF_GPIO, 0);
+  
+  vTaskDelay(pdMS_TO_TICKS(4000));
+
+  gpio_set_level(PUMP_ON_GPIO, 0);
+  gpio_set_level(PUMP_OFF_GPIO, 0);
+    //printf("GPIO40=%d GPIO41=%d\n", gpio_get_level(PUMP_ON_GPIO), gpio_get_level(PUMP_OFF_GPIO));
     publish_status(c);
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
     return;
@@ -291,9 +595,14 @@ void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_
   else if (strstr(msg, "PUMP OFF") != NULL) {
     printf("✅ PUMP OFF TRIGGERED!\n");
     s_device_state.pump_status = false;
-    gpio_set_level(PUMP_ON_GPIO, 0);
-    gpio_set_level(PUMP_OFF_GPIO, 1);
-    printf("GPIO12=%d GPIO13=%d\n", gpio_get_level(PUMP_ON_GPIO), gpio_get_level(PUMP_OFF_GPIO));
+  gpio_set_level(PUMP_ON_GPIO, 0);
+  gpio_set_level(PUMP_OFF_GPIO, 1);
+  
+  vTaskDelay(pdMS_TO_TICKS(4000));
+
+  gpio_set_level(PUMP_ON_GPIO, 0);
+  gpio_set_level(PUMP_OFF_GPIO, 0);
+    //printf("GPIO40=%d GPIO41=%d\n", gpio_get_level(PUMP_ON_GPIO), gpio_get_level(PUMP_OFF_GPIO));
     publish_status(c);
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
     return;
@@ -330,30 +639,95 @@ void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_
 struct mg_connection *my_mqtt_connect(mg_event_handler_t fn) {
   const char *url = WIZARD_MQTT_URL;
   char topic[100], message[200];
-  struct mg_mqtt_opts opts = {0};
+  struct mg_mqtt_opts opts;
   struct mg_connection *c;
 
-  // Manual JSON for offline status
-  snprintf(message, sizeof(message),
-    "{\"method\":\"status.notify\",\"params\":{\"status\":\"offline\"}}");
+  // Initialize opts to zero
+  memset(&opts, 0, sizeof(opts));
 
+  // ✅ ONLINE MESSAGE - Sent when device connects
+  snprintf(message, sizeof(message),
+    "{\"method\":\"status.notify\",\"params\":{\"status\":\"online\",\"pump_status\":%s,\"firmware_version\":\"%s\"}}",
+    s_device_state.pump_status ? "true" : "false",
+    s_device_state.firmware_version);
+
+  // Basic MQTT options
   opts.clean = true;
   opts.qos = s_qos;
   opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "status"));
-  opts.version = 4;
+  opts.version = 4;  // MQTT 3.1.1
   opts.retain = true;
   opts.message = mg_str(message);
+  
+  // ✅ KEEP ALIVE - Critical for timeout detection!
+  // Sends ping every 60 seconds, dashboard will detect offline if no ping received
+  opts.keepalive = 10;
+  
+  // No LWT support in this Mongoose version
+  // Dashboard will detect offline via timeout (90 seconds without heartbeat)
 
+  // Register RPC handlers (only once)
   if (s_rpc == NULL) {
-    // mg_rpc_add(&s_rpc, mg_str("state.set"), rpc_state_set, NULL);
-    // mg_rpc_add(&s_rpc, mg_str("state.get"), rpc_state_get, NULL);
     mg_rpc_add(&s_rpc, mg_str("ota.upload"), rpc_ota_upload, NULL);
+    mg_rpc_add(&s_rpc, mg_str("schedule.add"), rpc_schedule_add, NULL);
+    mg_rpc_add(&s_rpc, mg_str("schedule.delete"), rpc_schedule_delete, NULL);
+    mg_rpc_add(&s_rpc, mg_str("schedule.toggle"), rpc_schedule_toggle, NULL);
+    mg_rpc_add(&s_rpc, mg_str("schedule.list"), rpc_schedule_list, NULL);
   }
 
   if ((c = mg_mqtt_connect(&g_mgr, url, &opts, fn, NULL)) != NULL) {
-    MG_DEBUG(("%lu MQTT connect initiated", c->id));
+    MG_DEBUG(("%lu MQTT connect initiated with keepalive=%d", c->id, opts.keepalive));
+    printf("📡 MQTT connecting with 60s keepalive...\n");
   }
   return c;
+}
+
+// ✅ IMPORTANT: Add this function to handle graceful shutdown (optional)
+// Call this if you want to send offline status before restart
+void mqtt_send_offline_status(void) {
+  if (s_mqtt_connection != NULL) {
+    char topic[100];
+    char json[256];
+    struct mg_mqtt_opts pub_opts;
+    
+    snprintf(json, sizeof(json),
+      "{\"method\":\"status.notify\",\"params\":{\"status\":\"offline\"}}");
+
+    memset(&pub_opts, 0, sizeof(pub_opts));
+    pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "status"));
+    pub_opts.message = mg_str(json);
+    pub_opts.qos = s_qos;
+    pub_opts.retain = true;
+    mg_mqtt_pub(s_mqtt_connection, &pub_opts);
+    
+    printf("📴 Sent offline status\n");
+    vTaskDelay(pdMS_TO_TICKS(500)); // Give time to send
+  }
+}
+
+// Heartbeat callback - sends status every 30 seconds (more frequent for better detection)
+static void heartbeat_callback(void *arg) {
+  if (s_mqtt_connection != NULL) {
+    printf("💓 Heartbeat\n");
+    publish_status(s_mqtt_connection);
+  }
+}
+
+// Initialize heartbeat timer - call this in app_main() after mongoose_init()
+static void heartbeat_init(void) {
+  esp_timer_create_args_t timer_args = {
+    .callback = &heartbeat_callback,
+    .arg = NULL,
+    .name = "heartbeat"
+  };
+  
+  esp_timer_create(&timer_args, &s_heartbeat_timer);
+  
+  // Send heartbeat every 30 seconds
+  // Combined with MQTT keepalive (60s), dashboard will detect offline within 90s
+  esp_timer_start_periodic(s_heartbeat_timer, 30 * 1000000ULL); // 30 seconds
+  
+  printf("💓 Heartbeat initialized (30s interval)\n");
 }
 
 void app_main() {
@@ -364,8 +738,19 @@ void app_main() {
   };
   esp_vfs_spiffs_register(&conf);
 
-  // wifi_init(WIFI_SSID, WIFI_PASS);
-  // printf("WiFi connected, initializing Mongoose...\n");
+  gpio_config_t io_conf = {.pin_bit_mask =
+                               (1ULL << PUMP_ON_GPIO) | (1ULL << PUMP_OFF_GPIO),
+                           .mode = GPIO_MODE_OUTPUT,
+                           .pull_down_en = 0,
+                           .pull_up_en = 0,
+                           .intr_type = GPIO_INTR_DISABLE};
+  gpio_config(&io_conf);
+ 
+  gpio_set_level(PUMP_ON_GPIO, 0);
+  gpio_set_level(PUMP_OFF_GPIO, 0);
+  vTaskDelay(pdMS_TO_TICKS(1000));
+
+
 
     esp_err_t ret = sim_init();
   if (ret != ESP_OK) {
@@ -379,15 +764,29 @@ void app_main() {
   }
 
   mongoose_init();
+  scheduler_init();
+  heartbeat_init();
 
+  sntp_setoperatingmode(SNTP_OPMODE_POLL);
+  sntp_setservername(0, "pool.ntp.org");
+  sntp_init();
 
-  gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
-  gpio_set_level(LED_GPIO, 0);  // LED OFF initially
+  // Wait for time sync
+  time_t now = 0;
+  struct tm timeinfo = { 0 };
+  int retry = 0;
+  while (timeinfo.tm_year < (2016 - 1900) && ++retry < 10) {
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    time(&now);
+    localtime_r(&now, &timeinfo);
+  }
 
-  gpio_set_direction(PUMP_ON_GPIO, GPIO_MODE_OUTPUT);
-  gpio_set_direction(PUMP_OFF_GPIO, GPIO_MODE_OUTPUT);
-  gpio_set_level(PUMP_ON_GPIO, 0);   // Pump OFF initially
-  gpio_set_level(PUMP_OFF_GPIO, 0);  // Safety ON initially
+  if (timeinfo.tm_year < (2016 - 1900)) {
+   ESP_LOGE(TAG,"❌ Failed to sync time\n");
+  } else {
+   ESP_LOGI(TAG,"✅ Time synced: %s", asctime(&timeinfo));
+  }
+
 
   esp_task_wdt_config_t wdt_config = {
     .timeout_ms = 15000,  // 15 seconds
@@ -397,9 +796,9 @@ void app_main() {
   esp_task_wdt_init(&wdt_config);
   esp_task_wdt_add(NULL);
 
-const esp_partition_t *ota_part = esp_ota_get_next_update_partition(NULL);
-printf("OTA ready: %s (%lu KB)\n", ota_part->label, ota_part->size/1024);
-
+  const esp_partition_t *ota_part = esp_ota_get_next_update_partition(NULL);
+  //printf("OTA ready: %s (%lu KB)\n", ota_part->label, ota_part->size/1024);
+  
 
   struct mongoose_mqtt_handlers mqtt_handlers = {
     my_mqtt_connect,
@@ -408,7 +807,7 @@ printf("OTA ready: %s (%lu KB)\n", ota_part->label, ota_part->size/1024);
   };
   mongoose_set_mqtt_handlers(&mqtt_handlers);
 
-  printf("MQTT handlers set. Starting main loop...\n");
+  ESP_LOGI(TAG,"MQTT handlers set. Starting main loop...\n");
   for (;;) {
     mongoose_poll();
     esp_task_wdt_reset();      // 🔧 FIX: Reset watchdog every loop
