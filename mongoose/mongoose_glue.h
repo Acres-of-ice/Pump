@@ -19,7 +19,12 @@ extern "C" {
 #define WIZARD_ENABLE_WEBSOCKET 0
 
 #define WIZARD_ENABLE_MQTT 1
+// MQTT broker URL configured via menuconfig (CONFIG_MQTT_BROKER_URL)
+#ifndef CONFIG_MQTT_BROKER_URL
 #define WIZARD_MQTT_URL "mqtt://broker.hivemq.com:1883"
+#else
+#define WIZARD_MQTT_URL CONFIG_MQTT_BROKER_URL
+#endif
 
 #define WIZARD_ENABLE_SNTP 0  // Enable time sync.
 #define WIZARD_SNTP_TYPE 0    // 0: default Google, 1: DHCP, 2: custom
@@ -32,12 +37,14 @@ extern "C" {
 #define WIZARD_ENABLE_MDNS 0
 #define WIZARD_MDNS_NAME ""
 
-#define WIZARD_ENABLE_WIFI 1
-#define WIZARD_WIFI_NAME "Acres of Ice"
-#define WIZARD_WIFI_PASS "MyPassword"
+// WiFi is currently disabled in favor of SIM connectivity
+// Configure WiFi credentials via menuconfig (CONFIG_WIFI_SSID/CONFIG_WIFI_PASSWORD)
+#define WIZARD_ENABLE_WIFI 0
+#define WIZARD_WIFI_NAME ""
+#define WIZARD_WIFI_PASS ""
 #define WIZARD_ENABLE_WIFI_AP 0
-#define WIZARD_WIFI_AP_NAME "MyAp"
-#define WIZARD_WIFI_AP_PASS "MyApPass"
+#define WIZARD_WIFI_AP_NAME ""
+#define WIZARD_WIFI_AP_PASS ""
 
 #define WIZARD_ENABLE_MODBUS 0
 #define WIZARD_MODBUS_PORT 502

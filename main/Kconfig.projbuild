@@ -1,0 +1,52 @@
+menu "Pump Controller Configuration"
+
+    choice INTERNET_MODE
+        prompt "Internet Connection Mode"
+        default INTERNET_SIM
+        help
+            Select the primary network connectivity method.
+
+        config INTERNET_WIFI
+            bool "WiFi"
+            help
+                Use WiFi for network connectivity.
+
+        config INTERNET_SIM
+            bool "SIM/Cellular (4G LTE)"
+            help
+                Use SIM7600 cellular modem for network connectivity.
+    endchoice
+
+    menu "WiFi Configuration"
+        depends on INTERNET_WIFI
+
+        config WIFI_SSID
+            string "WiFi SSID"
+            default "YourSSID"
+            help
+                SSID (network name) to connect to.
+
+        config WIFI_PASSWORD
+            string "WiFi Password"
+            default "YourPassword"
+            help
+                WiFi password (WPA or WPA2) to connect to.
+
+    endmenu
+
+    config DEVICE_ID
+        string "Device ID"
+        default "Shey"
+        help
+            Unique identifier for this device.
+            Used in MQTT topics: mg_mqtt_dashboard/{DEVICE_ID}/rx
+
+    config MQTT_BROKER_URL
+        string "MQTT Broker URL"
+        default "mqtt://broker.hivemq.com:1883"
+        help
+            MQTT broker URL. Examples:
+            - mqtt://broker.hivemq.com:1883 (public, unsecured)
+            - mqtts://your-broker.com:8883 (TLS secured)
+
+endmenu

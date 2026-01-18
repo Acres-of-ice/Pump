@@ -20,11 +20,7 @@
 
 #include "sim.h"
 
-#define WIFI_SSID "Acres of Ice"
-#define WIFI_PASS "UkDfPNEj5@"
-
-static bool s_ota_active = false;
-// static esp_ota_handle_t s_ota_handle = 0;
+// WiFi and network configuration now via menuconfig (see main/Kconfig.projbuild)
 
 #define LED_GPIO GPIO_NUM_8
 
@@ -42,14 +38,7 @@ extern void wifi_init(const char *ssid, const char *pass);
 
 static struct mg_rpc *s_rpc = NULL;
 static uint8_t s_qos = 1;
-static char s_device_id[40];
-#define DEVICE_ID "Shey"
 static const char *s_topic_prefix = "mg_mqtt_dashboard";
-
-static esp_ota_handle_t s_ota_handle = 0;
-static bool s_ota_in_progress = false;
-
-static struct mg_connection *s_mqtt_conn = NULL;
 
 struct device_state {
   bool pump_status;            // true = ON, false = OFF
@@ -57,24 +46,8 @@ struct device_state {
 };
 static struct device_state s_device_state = {false, FIRMWARE_VERSION};
 
-// struct device_state {
-//   bool led_status;
-//   char firmware_version[20];
-// };
-// static struct device_state s_device_state = {false, FIRMWARE_VERSION};
-
-// static char *make_topic_name(char *buf, size_t len, const char *suffix) {
-//   if (s_device_id[0] == '\0') {
-//     mg_snprintf(s_device_id, sizeof(s_device_id), "device_%llu", mg_now());
-//   }
-//   mg_snprintf(buf, len, "%s/%s/%s", s_topic_prefix, s_device_id, suffix);
-//   return buf;
-// }
-
-
 static char *make_topic_name(char *buf, size_t len, const char *suffix) {
-  // FIXED DEVICE ID - NO MORE AUTO-GENERATION!
-  mg_snprintf(buf, len, "%s/%s/%s", s_topic_prefix, DEVICE_ID, suffix);
+  mg_snprintf(buf, len, "%s/%s/%s", s_topic_prefix, CONFIG_DEVICE_ID, suffix);
   return buf;
 }
 
@@ -143,17 +116,6 @@ static void rpc_state_set(struct mg_rpc_req *r) {
   }
 }
 
-// static void rpc_state_get(struct mg_rpc_req *r) {
-//   char json[128];
-//   snprintf(json, sizeof(json), 
-//     "{\"pump_status\":%s}", 
-//     s_device_state.pump_status ? "true" : "false");
-//   mg_rpc_ok(r, "%s", json);
-// }
-
-
-static struct mg_connection *s_mqtt_connection = NULL;
-
 static void rpc_ota_upload(struct mg_rpc_req *r) {
   long ofs = mg_json_get_long(r->frame, "$.params.offset", -1);
   long tot = mg_json_get_long(r->frame, "$.params.total", -1);
@@ -189,37 +151,12 @@ static void rpc_ota_upload(struct mg_rpc_req *r) {
     }
     
     if (success) {
-      // ✅ Success - manually publish response
       printf("  ✅ Success: %.1f%% (%ld/%ld)\n", (ofs + len) * 100.0 / tot, ofs + len, tot);
-      
-      // Build JSON response manually
-      char response[128];
-      snprintf(response, sizeof(response), 
-               "{\"id\":null,\"result\":\"ok\"}");
-      
-      printf("  📤 Manual publish: %s\n", response);
-      
-      // Publish directly to tx topic
-      if (s_mqtt_connection != NULL) {
-        char topic[100];
-        struct mg_mqtt_opts pub_opts;
-        memset(&pub_opts, 0, sizeof(pub_opts));
-        pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
-        pub_opts.message = mg_str(response);
-        pub_opts.qos = 1;
-        mg_mqtt_pub(s_mqtt_connection, &pub_opts);
-        printf("  ✅ Response published to %s\n", topic);
-      } else {
-        printf("  ⚠️  No MQTT connection available!\n");
-      }
-      
-      // Also call mg_rpc_ok for compatibility
       mg_rpc_ok(r, "%m", MG_ESC("ok"));
-      
-      // If last chunk
+
+      // If last chunk, reboot to apply new firmware
       if (ofs + len >= tot) {
-        printf("  🎉 LAST CHUNK - OTA COMPLETE!\n");
-        printf("  ⏰ Rebooting in 2 seconds...\n");
+        printf("  🎉 OTA COMPLETE! Rebooting in 2 seconds...\n");
         vTaskDelay(pdMS_TO_TICKS(2000));
         esp_restart();
       }
@@ -250,21 +187,6 @@ void my_mqtt_on_connect(struct mg_connection *c, int code) {
   printf("MQTT Connected! Visit https://mongoose.ws/mqtt-dashboard/\n");
 }
 
-// void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_str data) {
-//   struct mg_iobuf io = {0, 0, 0, 512};
-//   struct mg_rpc_req r = {&s_rpc, NULL, mg_pfn_iobuf, &io, NULL, {data.buf, data.len}};
-//   size_t clipped_len = data.len > 512 ? 512 : data.len;
-  
-//   printf("MQTT RX: %.*s <- %.*s\n", (int)topic.len, topic.buf, (int)clipped_len, data.buf);
-  
-//   mg_rpc_process(&r);
-//   if (io.buf && io.len > 0) {
-//     publish_response(c, (char *) io.buf, io.len);
-//     publish_status(c);
-//   }
-//   mg_iobuf_free(&io);
-// }
-
 void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_str data) {
   char msg[512];  // Increased size for OTA messages
   int copy_len = (data.len < sizeof(msg) - 1) ? data.len : sizeof(msg) - 1;
@@ -273,10 +195,7 @@ void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_
   
   printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
   printf("📨 MQTT RX: %s\n", msg);
-  
-  // Store connection globally for RPC functions to use
-  s_mqtt_connection = c;
-  
+
   // 🔥 DIRECT PUMP CONTROL - NO RPC LAYER!
   if (strstr(msg, "PUMP ON") != NULL) {
     printf("✅ PUMP ON TRIGGERED!\n");
@@ -345,8 +264,6 @@ struct mg_connection *my_mqtt_connect(mg_event_handler_t fn) {
   opts.message = mg_str(message);
 
   if (s_rpc == NULL) {
-    // mg_rpc_add(&s_rpc, mg_str("state.set"), rpc_state_set, NULL);
-    // mg_rpc_add(&s_rpc, mg_str("state.get"), rpc_state_get, NULL);
     mg_rpc_add(&s_rpc, mg_str("ota.upload"), rpc_ota_upload, NULL);
   }
 
@@ -364,10 +281,12 @@ void app_main() {
   };
   esp_vfs_spiffs_register(&conf);
 
-  // wifi_init(WIFI_SSID, WIFI_PASS);
-  // printf("WiFi connected, initializing Mongoose...\n");
-
-    esp_err_t ret = sim_init();
+  // Initialize network connectivity based on menuconfig selection
+#ifdef CONFIG_INTERNET_WIFI
+  wifi_init(CONFIG_WIFI_SSID, CONFIG_WIFI_PASSWORD);
+  printf("WiFi connected, initializing Mongoose...\n");
+#else  // CONFIG_INTERNET_SIM
+  esp_err_t ret = sim_init();
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "SIM initialization failed");
     // System cannot work without network in SIM mode
@@ -377,6 +296,7 @@ void app_main() {
   }else{
     ESP_LOGI(TAG, "SIM initialization succesful");
   }
+#endif
 
   mongoose_init();
 
@@ -402,9 +322,10 @@ printf("OTA ready: %s (%lu KB)\n", ota_part->label, ota_part->size/1024);
 
 
   struct mongoose_mqtt_handlers mqtt_handlers = {
-    my_mqtt_connect,
-    my_mqtt_on_connect,
-    my_mqtt_on_message,
+    .connect_fn = my_mqtt_connect,
+    .on_connect_fn = my_mqtt_on_connect,
+    .on_message_fn = my_mqtt_on_message,
+    .on_cmd_fn = NULL,
   };
   mongoose_set_mqtt_handlers(&mqtt_handlers);
 
