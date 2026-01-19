@@ -21,7 +21,7 @@ extern "C" {
 #define WIZARD_ENABLE_MQTT 1
 // MQTT broker URL configured via menuconfig (CONFIG_MQTT_BROKER_URL)
 #ifndef CONFIG_MQTT_BROKER_URL
-#define WIZARD_MQTT_URL "mqtt://44.194.157.172:1883"
+#define WIZARD_MQTT_URL "mqtt://aoi:4201@44.194.157.172:1883"
 #else
 #define WIZARD_MQTT_URL CONFIG_MQTT_BROKER_URL
 #endif
