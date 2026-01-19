@@ -38,7 +38,7 @@ ADMIN_EMAILS = [
 ]
 
 # MQTT Configuration
-MQTT_BROKER_URL = "mqtt://44.194.157.172:1883"
+MQTT_BROKER_URL = "mqtt://aoi:4201@44.194.157.172:1883"
 MQTT_TOPIC_PREFIX = "pump"
 
 # Cache for JWKS keys
