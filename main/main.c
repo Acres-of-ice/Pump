@@ -61,6 +61,10 @@ static struct mg_connection *s_mqtt_conn = NULL;
 
 static struct mg_connection *s_mqtt_connection = NULL;
 
+// Add these after your existing global variables
+static int64_t s_boot_time = 0;  // Boot timestamp in seconds
+static char s_imsi[20] = "Unknown";  // IMSI number from SIM
+
 struct device_state {
   bool pump_status;            // true = ON, false = OFF
   char firmware_version[20];
@@ -547,6 +551,60 @@ void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_
   printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
   printf("📨 MQTT RX: %s\n", msg);
 
+
+    // 🔥 STATUS REQUEST - Reply with firmware version and site name
+  if (strstr(msg, "status") != NULL || strstr(msg, "STATUS") != NULL) {
+    printf("📊 STATUS REQUEST RECEIVED!\n");
+    
+    // Calculate uptime
+    int64_t current_time = get_current_timestamp();
+    int64_t uptime_seconds = current_time - s_boot_time;
+    int uptime_days = uptime_seconds / 86400;
+    int uptime_hours = (uptime_seconds % 86400) / 3600;
+    int uptime_minutes = (uptime_seconds % 3600) / 60;
+    
+    char uptime_str[64];
+    if (uptime_days > 0) {
+      snprintf(uptime_str, sizeof(uptime_str), "%d days, %d hours", uptime_days, uptime_hours);
+    } else if (uptime_hours > 0) {
+      snprintf(uptime_str, sizeof(uptime_str), "%d hours, %d minutes", uptime_hours, uptime_minutes);
+    } else {
+      snprintf(uptime_str, sizeof(uptime_str), "%d minutes", uptime_minutes);
+    }
+    
+    char response[512];
+    snprintf(response, sizeof(response),
+      "{\"method\":\"status.response\",\"params\":{"
+      "\"site_name\":\"%s\","
+      "\"firmware_version\":\"%s\","
+      "\"pump_status\":\"%s\","
+      "\"imsi\":\"%s\","
+      "\"uptime\":\"%s\"}}",
+      CONFIG_DEVICE_ID,
+      s_device_state.firmware_version,
+      s_device_state.pump_status ? "ON" : "OFF",
+      s_imsi,
+      uptime_str);
+    
+    // Publish response to tx topic
+    char topic_tx[100];
+    struct mg_mqtt_opts pub_opts;
+    memset(&pub_opts, 0, sizeof(pub_opts));
+    pub_opts.topic = mg_str(make_topic_name(topic_tx, sizeof(topic_tx), "tx"));
+    pub_opts.message = mg_str(response);
+    pub_opts.qos = 1;
+    mg_mqtt_pub(c, &pub_opts);
+    
+    printf("✅ Status response sent:\n");
+    printf("   Site: %s\n", CONFIG_DEVICE_ID);
+    printf("   Firmware: %s\n", s_device_state.firmware_version);
+    printf("   Pump: %s\n", s_device_state.pump_status ? "ON" : "OFF");
+    printf("   IMSI: %s\n", s_imsi);
+    printf("   Uptime: %s\n", uptime_str);
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
+    return;
+  }
+
   // 🔥 DIRECT PUMP CONTROL - NO RPC LAYER!
   if (strstr(msg, "ON") != NULL) {
     printf("✅ PUMP ON TRIGGERED!\n");
@@ -705,7 +763,24 @@ static void heartbeat_init(void) {
   printf("💓 Heartbeat initialized (30s interval)\n");
 }
 
+// Function to retrieve IMSI from SIM module
+static void get_imsi_from_sim(void) {
+  // Try to get IMSI from SIM module
+  char *imsi = sim_get_imsi();
+  
+  if (imsi != NULL && strlen(imsi) > 0) {
+    strncpy(s_imsi, imsi, sizeof(s_imsi) - 1);
+    s_imsi[sizeof(s_imsi) - 1] = '\0';
+    ESP_LOGI(TAG, "✅ IMSI retrieved: %s", s_imsi);
+  } else {
+    strcpy(s_imsi, "Not Available");
+    ESP_LOGW(TAG, "⚠️  IMSI not available");
+  }
+}
+
 void app_main() {
+
+  s_boot_time = 0;
   esp_vfs_spiffs_conf_t conf = {
     .base_path = "/spiffs",
     .max_files = 20,
@@ -736,6 +811,9 @@ void app_main() {
     }
   }else{
     ESP_LOGI(TAG, "SIM initialization succesful");
+        // Get IMSI after SIM is initialized
+    // vTaskDelay(pdMS_TO_TICKS(2000));  // Wait for SIM to be ready
+    // get_imsi_from_sim();
   }
 
 
@@ -758,9 +836,12 @@ void app_main() {
   }
 
   if (timeinfo.tm_year < (2016 - 1900)) {
-   ESP_LOGE(TAG,"❌ Failed to sync time\n");
+    ESP_LOGE(TAG,"❌ Failed to sync time\n");
+    s_boot_time = 0;  // Fallback to 0 if time sync fails
   } else {
-   ESP_LOGI(TAG,"✅ Time synced: %s", asctime(&timeinfo));
+    ESP_LOGI(TAG,"✅ Time synced: %s", asctime(&timeinfo));
+    s_boot_time = (int64_t)now;  // Record actual boot time
+    ESP_LOGI(TAG,"📅 Boot time recorded: %lld", s_boot_time);
   }
 
 

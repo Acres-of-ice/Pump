@@ -106,6 +106,35 @@ const char *sim_get_imsi(void) {
   return imsi_number[0] != '\0' ? imsi_number : "Unknown";
 }
 
+// const char* sim_get_imsi(void) {
+//   static char imsi[20] = {0};
+  
+//   // Send AT+CIMI command to get IMSI
+//   char *response = sim_send_at_command("AT+CIMI", 2000);
+  
+//   if (response != NULL) {
+//     // Parse IMSI from response (typically 15 digits)
+//     char *imsi_start = response;
+//     // Skip OK and newlines
+//     while (*imsi_start && (*imsi_start == '\r' || *imsi_start == '\n' || 
+//            strncmp(imsi_start, "OK", 2) == 0)) {
+//       imsi_start++;
+//     }
+    
+//     // Extract digits
+//     int i = 0;
+//     while (*imsi_start && i < 15 && isdigit(*imsi_start)) {
+//       imsi[i++] = *imsi_start++;
+//     }
+//     imsi[i] = '\0';
+    
+//     return imsi;
+//   }
+  
+//   return NULL;
+// }
+
+
 esp_err_t sim_disconnect(void) {
   ESP_LOGI(TAG, "Disconnecting SIM module...");
   return sim_cleanup();
