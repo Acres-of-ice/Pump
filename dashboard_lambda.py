@@ -38,8 +38,11 @@ ADMIN_EMAILS = [
 ]
 
 # MQTT Configuration
-MQTT_BROKER_URL = "mqtt://aoi:4201@44.194.157.172:1883"
+# WebSocket URL for browser connections (browsers can't use mqtt://, need ws://)
+MQTT_BROKER_URL = "ws://44.194.157.172:8083/mqtt"
 MQTT_TOPIC_PREFIX = "pump"
+MQTT_USERNAME = "aoi"
+MQTT_PASSWORD = "4201"
 
 # Cache for JWKS keys
 _jwks_cache = None
@@ -648,6 +651,8 @@ def render_dashboard(user_email, device_name, is_admin):
             clean: true,
             connectTimeout: 5000,
             clientId: 'pump-' + USER_CONFIG.device + '-' + Math.random().toString(16).substr(2, 8),
+            username: '{MQTT_USERNAME}',
+            password: '{MQTT_PASSWORD}',
         }};
 
         let client = null;
