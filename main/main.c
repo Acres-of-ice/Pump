@@ -629,7 +629,11 @@ struct mg_connection *my_mqtt_connect(mg_event_handler_t fn) {
   opts.version = 4;  // MQTT 3.1.1
   opts.retain = true;
   opts.message = mg_str(message);
-  
+
+  // ✅ MQTT Authentication - extract user/pass from URL
+  opts.user = mg_url_user(url);
+  opts.pass = mg_url_pass(url);
+
   // ✅ KEEP ALIVE - Critical for timeout detection!
   // Sends ping every 60 seconds, dashboard will detect offline if no ping received
   opts.keepalive = 60;
