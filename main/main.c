@@ -548,7 +548,7 @@ void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_
   printf("📨 MQTT RX: %s\n", msg);
 
   // 🔥 DIRECT PUMP CONTROL - NO RPC LAYER!
-  if (strstr(msg, "PUMP ON") != NULL) {
+  if (strstr(msg, "ON") != NULL) {
     printf("✅ PUMP ON TRIGGERED!\n");
     s_device_state.pump_status = true;
   gpio_set_level(PUMP_ON_GPIO, 1);
@@ -563,7 +563,7 @@ void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
     return;
   } 
-  else if (strstr(msg, "PUMP OFF") != NULL) {
+  else if (strstr(msg, "OFF") != NULL) {
     printf("✅ PUMP OFF TRIGGERED!\n");
     s_device_state.pump_status = false;
   gpio_set_level(PUMP_ON_GPIO, 0);
