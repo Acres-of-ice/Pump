@@ -39,7 +39,7 @@ ADMIN_EMAILS = [
 
 # MQTT Configuration
 # WebSocket URL for browser connections (browsers can't use mqtt://, need ws://)
-MQTT_BROKER_URL = "ws://44.194.157.172:8083/mqtt"
+MQTT_BROKER_URL = "ws://44.194.157.172:9001/mqtt"
 MQTT_TOPIC_PREFIX = "pump"
 MQTT_USERNAME = "aoi"
 MQTT_PASSWORD = "4201"
