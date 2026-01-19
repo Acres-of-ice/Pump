@@ -533,7 +533,7 @@ void my_mqtt_on_connect(struct mg_connection *c, int code) {
   mg_mqtt_sub(c, &opts);
   publish_status(c);
   MG_DEBUG(("%lu code %d. Subscribed to rx topic", c->id, code));
-  printf("MQTT Connected! Visit https://mongoose.ws/mqtt-dashboard/\n");
+  //printf("MQTT Connected! Visit https://mongoose.ws/mqtt-dashboard/\n");
 }
 
 
@@ -632,7 +632,7 @@ struct mg_connection *my_mqtt_connect(mg_event_handler_t fn) {
   
   // ✅ KEEP ALIVE - Critical for timeout detection!
   // Sends ping every 60 seconds, dashboard will detect offline if no ping received
-  opts.keepalive = 10;
+  opts.keepalive = 60;
   
   // No LWT support in this Mongoose version
   // Dashboard will detect offline via timeout (90 seconds without heartbeat)
@@ -733,7 +733,7 @@ void app_main() {
   }else{
     ESP_LOGI(TAG, "SIM initialization succesful");
   }
-#endif
+
 
   mongoose_init();
   scheduler_init();

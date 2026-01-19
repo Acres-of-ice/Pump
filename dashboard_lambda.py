@@ -38,7 +38,7 @@ ADMIN_EMAILS = [
 ]
 
 # MQTT Configuration
-MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt"
+MQTT_BROKER_URL = "mqtt://44.194.157.172:1883"
 MQTT_TOPIC_PREFIX = "pump"
 
 # Cache for JWKS keys
