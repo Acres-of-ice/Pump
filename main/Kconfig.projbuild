@@ -1,286 +1,52 @@
-menu "pUMP Configuration"
+menu "Pump Controller Configuration"
 
-	choice SITE_SELECT
-		prompt "Select Site"
-		default SITE_TEST
-		help
-			Select the deployment site. Each site has pre-configured settings.
-
-		config SITE_SHEY
-			bool "Shey"
-		config SITE_OFFICE
-			bool "Office"
-		config SITE_TEST
-			bool "Test"
-	endchoice
-
-	config SITE_NAME
-		string
-		default "Shey" if SITE_SHEY
-		default "Office" if SITE_OFFICE
-		default "Test" if SITE_TEST
-		default "Unknown"
-		help
-			Site name used for identification and folder naming.
-
-	choice FRAMESIZE
-		bool "Camera Frame Size"
-		default FRAMESIZE_QSXGA
-		help
-			Select picture frame size for camera captures.
-
-		config FRAMESIZE_240X240
-			bool "240x240"
-		config FRAMESIZE_QVGA
-			bool "320x240 (QVGA)"
-		config FRAMESIZE_HVGA
-			bool "480x320 (HVGA)"
-		config FRAMESIZE_VGA
-			bool "640x480 (VGA)"
-		config FRAMESIZE_SVGA
-			bool "800x600 (SVGA)"
-		config FRAMESIZE_XGA
-			bool "1024x768 (XGA)"
-		config FRAMESIZE_HD
-			bool "1280x720 (HD)"
-		config FRAMESIZE_SXGA
-			bool "1280x1024 (SXGA)"
-		config FRAMESIZE_UXGA
-			bool "1600x1200 (UXGA)"
-		config FRAMESIZE_QXGA
-			bool "2048x1536 (QXGA)"
-		config FRAMESIZE_QSXGA
-			bool "2560x1920 (QSXGA)"
-		config FRAMESIZE_5MP
-			bool "2592x1944 (5MP)"
-	endchoice
-
-    config ENABLE_HW
-        bool "Enable Hardware Configuration"
-        default n
+    choice INTERNET_MODE
+        prompt "Internet Connection Mode"
+        default INTERNET_SIM
         help
-            Enable to customize hardware settings. If disabled, site defaults will be used.
+            Select the primary network connectivity method.
 
-    menu "Hardware Configuration"
-        visible if ENABLE_HW
+        config INTERNET_WIFI
+            bool "WiFi"
+            help
+                Use WiFi for network connectivity.
 
-		config PCB_TYPE_OCT
-			bool "Use OCT (Octal SPIRAM) PCB"
-			default y if SITE_URSI
-			default n
-			help
-				Enable for OCT (Octal SPIRAM) PCB variant.
-				OCT mode uses GPIO 33-37 for SPIRAM, requiring alternative camera pins.
-				QUAD mode (default) frees up GPIO 35-37 for camera use.
+        config INTERNET_SIM
+            bool "SIM/Cellular (4G LTE)"
+            help
+                Use SIM7600 cellular modem for network connectivity.
+    endchoice
 
-				This is automatically enabled for Ursi site.
+    menu "WiFi Configuration"
+        depends on INTERNET_WIFI
 
-	endmenu
+        config WIFI_SSID
+            string "WiFi SSID"
+            default "YourSSID"
+            help
+                SSID (network name) to connect to.
 
-	config ENABLE_NETWORK
-		bool "Enable Network Configuration"
-		default n
-		help
-			Enable to customize network settings (WiFi, SIM, MQTT). If disabled, defaults will be used.
+        config WIFI_PASSWORD
+            string "WiFi Password"
+            default "YourPassword"
+            help
+                WiFi password (WPA or WPA2) to connect to.
 
-	menu "Network Configuration"
-		visible if ENABLE_NETWORK
+    endmenu
 
-		config ENABLE_SIM
-			bool "Enable SIM/Cellular Connection"
-			default y
-			help
-				Enable SIM card/cellular modem for internet connectivity instead of WiFi.
+    config DEVICE_ID
+        string "Device ID"
+        default "Shey"
+        help
+            Unique identifier for this device.
+            Used in MQTT topics: mg_mqtt_dashboard/{DEVICE_ID}/rx
 
-		config HAS_SIM
-			bool
-			default ENABLE_SIM
-			help
-				Internal config that mirrors ENABLE_SIM for compatibility with sim.c
-
-		menu "WiFi Settings"
-			depends on !ENABLE_SIM
-
-			config ESP_WIFI_SSID
-				string "WiFi SSID"
-				default "AOI_IOT"
-				help
-					SSID (network name) to connect to.
-
-			config ESP_WIFI_PASSWORD
-				string "WiFi Password"
-				default "d0nFm!L3Fb"
-				help
-					WiFi password (WPA or WPA2) to connect to.
-
-			config ESP_MAXIMUM_RETRY
-				int "Maximum Connection Retries"
-				default 5
-				help
-					Set the Maximum retry to avoid station reconnecting to the AP unlimited when the AP is really inexistent.
-
-			config MDNS_HOSTNAME
-				string "mDNS Hostname"
-				default "esp32-camera"
-				help
-					The mDNS host name used by the ESP32.
-
-		endmenu
-
-		menu "SIM/Cellular Settings"
-			depends on ENABLE_SIM
-
-			config SMS_NOTIFICATION_NUMBER
-				string "SMS Notification Phone Number"
-				default "+919840803518"
-				help
-					Phone number to receive SMS notifications for deep sleep alerts.
-
-			config ENABLE_DEEP_SLEEP_SMS
-				depends on ENABLE_SLEEP_SCHEDULE
-				bool "Send SMS Before Entering Deep Sleep"
-				default n
-				help
-					Send SMS notification before entering deep sleep mode.
-
-		endmenu
-
-
-	endmenu
-
-	config ENABLE_OPERATION
-		bool "Enable Operation Settings"
-		default n
-		help
-			Enable to customize operation settings (publish interval, HTTP stream). If disabled, defaults will be used.
-
-	menu "Operation Settings"
-		visible if ENABLE_OPERATION
-
-		config PUBLISH_INTERVAL
-			int "Photo Publish Interval (minutes)"
-			range 1 1440
-			default 30
-			help
-				Interval in minutes between automatic image captures and MQTT publishes. Range: 1-1440 minutes (1 minute to 24 hours).
-
-		config ENABLE_HTTP_STREAM
-			bool "Enable HTTP Live Stream Server"
-			default y
-			help
-				Enable HTTP server for live camera preview stream. Access via http://<device-ip>:8080/stream
-
-	endmenu
-
-	config ENABLE_BATTERY
-		bool "Enable Battery Monitoring Configuration"
-		default n
-		help
-			Enable to customize battery monitoring settings. If disabled, defaults will be used.
-
-	menu "Battery Monitoring"
-		visible if ENABLE_BATTERY
-
-		config BATTERY_I2C_SDA
-			int "I2C SDA GPIO Pin"
-			range 0 48
-			default 15 if PCB_TYPE_OCT
-			default 3
-			help
-				GPIO pin for I2C SDA (data line) connected to MAX17048.
-
-		config BATTERY_I2C_SCL
-			int "I2C SCL GPIO Pin"
-			range 0 48
-			default 16 if PCB_TYPE_OCT
-			default 2
-			help
-				GPIO pin for I2C SCL (clock line) connected to MAX17048.
-
-		config BATTERY_CRITICAL_VOLTAGE
-			int "Critical Battery Voltage (millivolts)"
-			range 3000 4000
-			default 3500
-			help
-				Battery voltage threshold to enter critical mode and deep sleep (in mV). Default: 3500mV (3.5V). Below this voltage, the system becomes unstable and will enter emergency deep sleep to preserve battery.
-
-		config BATTERY_RECOVERY_VOLTAGE
-			int "Battery Recovery Voltage (millivolts)"
-			range 3500 4200
-			default 3800
-			help
-				Battery voltage threshold to exit critical mode and resume normal operation (in mV). Default: 4000mV (4.0V). System will remain in deep sleep until battery charges above this level.
-
-		config BATTERY_CRITICAL_SLEEP_INTERVAL
-			int "Critical Mode Deep Sleep Interval (minutes)"
-			range 5 120
-			default 30
-			help
-				How often to wake from deep sleep in critical battery mode to check voltage (in minutes). Default: 30 minutes. Longer intervals save more power but delay recovery detection.
-
-	endmenu
-
-	config ENABLE_POWER_MGMT
-		bool "Enable Power Management Configuration"
-		default n
-		help
-			Enable to customize power management settings (sleep schedules, communication windows). If disabled, defaults will be used.
-
-	menu "Power Management"
-		visible if ENABLE_POWER_MGMT
-
-		config BOOT_NO_SLEEP_WINDOW
-			int "Boot Window - No Sleep Duration (minutes)"
-			range 0 120
-			default 30
-			help
-				Duration in minutes after boot during which light sleep is disabled. This keeps the ESP fully awake and responsive for streaming setup, MQTT command testing, and configuration. Set to 0 to enable light sleep immediately after boot.
-
-		config ENABLE_ACTIVE_COMM_WINDOW
-			bool "Enable Active Communication Window"
-			default y
-			help
-				Enable a daily time window during which light sleep is disabled to ensure full responsiveness for MQTT communication. Useful for scheduled communication periods.
-
-		config ACTIVE_COMM_START_HOUR
-			depends on ENABLE_ACTIVE_COMM_WINDOW
-			int "Active Communication Start Hour (24-hour format)"
-			range 0 23
-			default 11
-			help
-				Hour to start active communication window (0-23). Example: 12 for 12 PM. Light sleep will be disabled during this period for maximum MQTT responsiveness.
-
-		config ACTIVE_COMM_END_HOUR
-			depends on ENABLE_ACTIVE_COMM_WINDOW
-			int "Active Communication End Hour (24-hour format)"
-			range 0 23
-			default 15
-			help
-				Hour to end active communication window (0-23). Example: 14 for 2 PM. Light sleep resumes after this time.
-
-		config ENABLE_SLEEP_SCHEDULE
-			bool "Enable Scheduled Light Sleep Mode"
-			default y
-			help
-				Enable extended light sleep during configured hours (e.g., night time). Device will skip photos and use longer sleep intervals during this period.
-
-		config SLEEP_START_HOUR
-			depends on ENABLE_SLEEP_SCHEDULE
-			int "Extended Sleep Start Hour (24-hour format)"
-			range 0 23
-			default 17
-			help
-				Hour to start extended light sleep period (0-23). Example: 18 for 6 PM. Photos will be skipped during this period.
-
-		config SLEEP_END_HOUR
-			depends on ENABLE_SLEEP_SCHEDULE
-			int "Extended Sleep End Hour (24-hour format)"
-			range 0 23
-			default 8
-			help
-				Hour to end extended light sleep period (0-23). Example: 8 for 8 AM. Normal operation resumes after this time.
-
-	endmenu
+    config MQTT_BROKER_URL
+        string "MQTT Broker URL"
+        default "mqtt://broker.hivemq.com:1883"
+        help
+            MQTT broker URL. Examples:
+            - mqtt://broker.hivemq.com:1883 (public, unsecured)
+            - mqtts://your-broker.com:8883 (TLS secured)
 
 endmenu
-

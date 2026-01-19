@@ -90,8 +90,7 @@ static void pump_turn_off_callback(void *arg);
 
 
 static char *make_topic_name(char *buf, size_t len, const char *suffix) {
-  // FIXED DEVICE ID - NO MORE AUTO-GENERATION!
-  mg_snprintf(buf, len, "%s/%s/%s", s_topic_prefix, DEVICE_ID, suffix);
+  mg_snprintf(buf, len, "%s/%s/%s", s_topic_prefix, CONFIG_DEVICE_ID, suffix);
   return buf;
 }
 
@@ -501,37 +500,12 @@ static void rpc_ota_upload(struct mg_rpc_req *r) {
     }
     
     if (success) {
-      // ✅ Success - manually publish response
       printf("  ✅ Success: %.1f%% (%ld/%ld)\n", (ofs + len) * 100.0 / tot, ofs + len, tot);
-      
-      // Build JSON response manually
-      char response[128];
-      snprintf(response, sizeof(response), 
-               "{\"id\":null,\"result\":\"ok\"}");
-      
-      printf("  📤 Manual publish: %s\n", response);
-      
-      // Publish directly to tx topic
-      if (s_mqtt_connection != NULL) {
-        char topic[100];
-        struct mg_mqtt_opts pub_opts;
-        memset(&pub_opts, 0, sizeof(pub_opts));
-        pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
-        pub_opts.message = mg_str(response);
-        pub_opts.qos = 1;
-        mg_mqtt_pub(s_mqtt_connection, &pub_opts);
-        printf("  ✅ Response published to %s\n", topic);
-      } else {
-        printf("  ⚠️  No MQTT connection available!\n");
-      }
-      
-      // Also call mg_rpc_ok for compatibility
       mg_rpc_ok(r, "%m", MG_ESC("ok"));
-      
-      // If last chunk
+
+      // If last chunk, reboot to apply new firmware
       if (ofs + len >= tot) {
-        printf("  🎉 LAST CHUNK - OTA COMPLETE!\n");
-        printf("  ⏰ Rebooting in 2 seconds...\n");
+        printf("  🎉 OTA COMPLETE! Rebooting in 2 seconds...\n");
         vTaskDelay(pdMS_TO_TICKS(2000));
         esp_restart();
       }
@@ -572,10 +546,7 @@ void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_
   
   printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
   printf("📨 MQTT RX: %s\n", msg);
-  
-  // Store connection globally for RPC functions to use
-  s_mqtt_connection = c;
-  
+
   // 🔥 DIRECT PUMP CONTROL - NO RPC LAYER!
   if (strstr(msg, "PUMP ON") != NULL) {
     printf("✅ PUMP ON TRIGGERED!\n");
@@ -762,6 +733,7 @@ void app_main() {
   }else{
     ESP_LOGI(TAG, "SIM initialization succesful");
   }
+#endif
 
   mongoose_init();
   scheduler_init();
@@ -801,9 +773,10 @@ void app_main() {
   
 
   struct mongoose_mqtt_handlers mqtt_handlers = {
-    my_mqtt_connect,
-    my_mqtt_on_connect,
-    my_mqtt_on_message,
+    .connect_fn = my_mqtt_connect,
+    .on_connect_fn = my_mqtt_on_connect,
+    .on_message_fn = my_mqtt_on_message,
+    .on_cmd_fn = NULL,
   };
   mongoose_set_mqtt_handlers(&mqtt_handlers);
 
