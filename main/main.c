@@ -693,7 +693,7 @@ struct mg_connection *my_mqtt_connect(mg_event_handler_t fn) {
 
   // ✅ KEEP ALIVE - Critical for timeout detection!
   // Sends ping every 60 seconds, dashboard will detect offline if no ping received
-  opts.keepalive = 60;
+  opts.keepalive = 20;
   
   // No LWT support in this Mongoose version
   // Dashboard will detect offline via timeout (90 seconds without heartbeat)

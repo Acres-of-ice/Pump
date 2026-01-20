@@ -41,8 +41,7 @@ ADMIN_EMAILS = [
 # WebSocket URL for browser connections (HiveMQ public broker)
 MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt"
 MQTT_TOPIC_PREFIX = "pump"
-# MQTT_USERNAME = ""
-# MQTT_PASSWORD = ""
+
 
 # Cache for JWKS keys
 _jwks_cache = None
@@ -695,14 +694,13 @@ def render_dashboard(user_email, device_name, is_admin):
         const prefix = '{MQTT_TOPIC_PREFIX}';
         const TIMEOUT_MS = 30000;
         const GRACE_PERIOD = 5000;
+        const INITIAL_WAIT_TIMEOUT = 30000;
         const chunkSize = 4096;
 
         const options = {{
             clean: true,
             connectTimeout: 5000,
             clientId: 'pump-' + USER_CONFIG.device + '-' + Math.random().toString(16).substr(2, 8),
-            # username: '{MQTT_USERNAME}',
-            # password: '{MQTT_PASSWORD}',
         }};
 
         let client = null;
@@ -712,6 +710,8 @@ def render_dashboard(user_email, device_name, is_admin):
         let timeoutChecker = null;
         let dashboardStartTime = Date.now();
         let dashboardConnectTime = 0;
+        let statusFetchTimeout = null;
+        let initialDeviceWaitTimeout = null;
 
         function logout() {{
             window.location.href = '{COGNITO_DOMAIN}/logout?client_id={COGNITO_APP_CLIENT_ID}&logout_uri=' + encodeURIComponent('{API_BASE_URL}');
@@ -810,34 +810,46 @@ def render_dashboard(user_email, device_name, is_admin):
         }}
 
         function updatePumpStatus() {{
-            const el = document.getElementById('pumpStatus');
-            const onBtn = document.getElementById('onBtn');
-            const offBtn = document.getElementById('offBtn');
+           const el = document.getElementById('pumpStatus');
+           const onBtn = document.getElementById('onBtn');
+           const offBtn = document.getElementById('offBtn');
 
-            if (devices[selectedDevice]) {{
-                const device = devices[selectedDevice];
-                onBtn.disabled = false;
-                offBtn.disabled = false;
-
-                if (!device.online && device.lastHeartbeat > 0) {{
-                    el.textContent = 'Device Offline';
-                    el.className = 'pump-state state-off';
-                    onBtn.disabled = true;
-                    offBtn.disabled = true;
-                }} else if (device.lastHeartbeat === 0) {{
-                    el.textContent = 'Waiting...';
-                    el.className = 'pump-state state-off';
-                }} else {{
-                    el.textContent = `Pump ${{device.pump_status ? 'ON' : 'OFF'}}`;
-                    el.className = 'pump-state ' + (device.pump_status ? 'state-on' : 'state-off');
-                }}
-            }} else {{
-                el.textContent = 'No Device';
-                el.className = 'pump-state state-off';
-                onBtn.disabled = true;
-                offBtn.disabled = true;
-            }}
-        }}
+           if (devices[selectedDevice]) {{
+           const device = devices[selectedDevice];
+        
+           // ✅ UPDATED: Check for offline state (either never connected or timed out)
+           if (!device.online && device.lastHeartbeat === 0) {{
+              // Device never connected
+              el.textContent = 'Device Offline';
+              el.className = 'pump-state state-off';
+              onBtn.disabled = true;
+              offBtn.disabled = true;
+           }} else if (!device.online && device.lastHeartbeat > 0) {{
+              // Device was online but went offline
+              el.textContent = 'Device Offline';
+              el.className = 'pump-state state-off';
+              onBtn.disabled = true;
+              offBtn.disabled = true;
+           }} else if (device.lastHeartbeat === 0) {{
+              // Still waiting for first heartbeat (within timeout period)
+              el.textContent = 'Waiting...';
+              el.className = 'pump-state state-off';
+              onBtn.disabled = true;
+              offBtn.disabled = true;
+           }} else {{
+              // Device is online
+              onBtn.disabled = false;
+              offBtn.disabled = false;
+              el.textContent = `Pump ${{device.pump_status ? 'ON' : 'OFF'}}`;
+              el.className = 'pump-state ' + (device.pump_status ? 'state-on' : 'state-off');
+           }}
+           }} else {{
+              el.textContent = 'No Device';
+              el.className = 'pump-state state-off';
+              onBtn.disabled = true;
+              offBtn.disabled = true;
+           }}
+           }}
 
         function createSchedule() {{
             if (!client?.connected || !selectedDevice) {{
@@ -1014,6 +1026,25 @@ def render_dashboard(user_email, device_name, is_admin):
             console.log('✅ Status display updated');
         }}
 
+        function startInitialDeviceWaitTimeout() {{
+            if (initialDeviceWaitTimeout) {{
+            clearTimeout(initialDeviceWaitTimeout);
+           }}
+    
+              initialDeviceWaitTimeout = setTimeout(() => {{
+              const deviceKey = USER_CONFIG.device.toLowerCase();
+              const device = devices[deviceKey];
+        
+              // If device still has lastHeartbeat = 0 after timeout, mark as offline
+              if (device && device.lastHeartbeat === 0) {{
+              console.log('⏰ Initial wait timeout - device never connected:', deviceKey);
+              device.online = false;
+              updateDeviceList();
+              updatePumpStatus();
+              }}
+           }}, INITIAL_WAIT_TIMEOUT);
+       }}
+
         document.getElementById('onBtn').addEventListener('click', () => {{
             if (client?.connected && selectedDevice && isDeviceAllowed(selectedDevice)) {{
                 client.publish(`${{prefix}}/${{selectedDevice}}/rx`, 'PUMP ON', {{ qos: 1 }});
@@ -1091,6 +1122,8 @@ def render_dashboard(user_email, device_name, is_admin):
                         devices[USER_CONFIG.device] = {{ pump_status: false, lastHeartbeat: 0, online: false }};
                     }}
                     selectedDevice = USER_CONFIG.device;
+
+                    startInitialDeviceWaitTimeout();
                 }}
 
                 dashboardConnectTime = Date.now();
@@ -1123,6 +1156,11 @@ def render_dashboard(user_email, device_name, is_admin):
 
                             if (!devices[id]) {{
                                 devices[id] = {{ pump_status: false, lastHeartbeat: 0, online: false }};
+                            }}
+                            if (devices[id].lastHeartbeat === 0 && initialDeviceWaitTimeout) {{
+                               console.log('✅ Device connected for first time, clearing initial timeout');
+                               clearTimeout(initialDeviceWaitTimeout);
+                               initialDeviceWaitTimeout = null;
                             }}
                             devices[id].pump_status = !!data.params?.pump_status;
                             devices[id].lastHeartbeat = now;
