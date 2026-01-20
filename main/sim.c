@@ -30,7 +30,7 @@ bool is_sms_connected = false;
 static sim_mode_t current_mode = SIM_MODE_INIT;
 static SemaphoreHandle_t sim_mode_mutex = NULL;
 static bool is_time_synchronized = false;
-static char imsi_number[16] = {0};
+char imsi_number[16] = {0};
 static const char *detected_apn = MODEM_PPP_APN;
 
 // Internet communication variables

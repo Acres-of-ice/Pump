@@ -28,6 +28,18 @@
 static bool s_ota_active = false;
 // static esp_ota_handle_t s_ota_handle = 0;
 
+// Determine pump type from Kconfig
+#if defined(CONFIG_Borewell_Pump)
+    #define PUMP_TYPE "Borewell Pump"
+#elif defined(CONFIG_1HP_PUMP)
+    #define PUMP_TYPE "1 HP Pump"
+#else
+    #define PUMP_TYPE "Unknown"
+#endif
+
+
+extern char imsi_number[16];
+
 #define LED_GPIO GPIO_NUM_8
 
 #define PUMP_ON_GPIO  GPIO_NUM_39    
@@ -572,13 +584,15 @@ void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_
       "{\"method\":\"status.response\",\"params\":{"
       "\"site_name\":\"%s\","
       "\"firmware_version\":\"%s\","
+      "\"pump_type\":\"%s\"," 
       "\"pump_status\":\"%s\","
       "\"imsi\":\"%s\","
       "\"uptime\":\"%s\"}}",
       CONFIG_DEVICE_ID,
       s_device_state.firmware_version,
+      PUMP_TYPE,
       s_device_state.pump_status ? "ON" : "OFF",
-      s_imsi,
+      imsi_number,
       uptime_str);
     
     // Publish response to tx topic
@@ -747,20 +761,6 @@ static void heartbeat_init(void) {
   ESP_LOGI(TAG_HB, "Heartbeat initialized (30s interval)");
 }
 
-// Function to retrieve IMSI from SIM module
-static void get_imsi_from_sim(void) {
-  // Try to get IMSI from SIM module
-  char *imsi = sim_get_imsi();
-  
-  if (imsi != NULL && strlen(imsi) > 0) {
-    strncpy(s_imsi, imsi, sizeof(s_imsi) - 1);
-    s_imsi[sizeof(s_imsi) - 1] = '\0';
-    ESP_LOGI(TAG, "✅ IMSI retrieved: %s", s_imsi);
-  } else {
-    strcpy(s_imsi, "Not Available");
-    ESP_LOGW(TAG, "⚠️  IMSI not available");
-  }
-}
 
 void app_main() {
 
