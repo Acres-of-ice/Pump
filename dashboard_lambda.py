@@ -548,6 +548,43 @@ def render_dashboard(user_email, device_name, is_admin):
             .buttons {{ flex-direction: column; align-items: center; }}
             .form-grid {{ grid-template-columns: 1fr; }}
         }}
+        .status-row {{
+            padding: 12px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }}
+        .status-row:last-child {{
+            border-bottom: none;
+        }}
+        .status-label {{
+            font-weight: 600;
+            color: var(--text);
+            font-size: 0.95rem;
+        }}
+        .status-value {{
+            color: var(--text-mute);
+            font-size: 0.95rem;
+        }}
+        .status-value.highlight {{
+            color: var(--accent);
+            font-weight: 600;
+        }}
+        .status-loading {{
+            text-align: center;
+            padding: 40px;
+            color: var(--text-mute);
+        }}
+        .status-loading::after {{
+            content: '...';
+            animation: dots 1.5s steps(4, end) infinite;
+        }}
+        @keyframes dots {{
+            0%, 20% {{ content: '.'; }}
+            40% {{ content: '..'; }}
+            60%, 100% {{ content: '...'; }}
+        }}
     </style>
 </head>
 <body>
@@ -572,6 +609,7 @@ def render_dashboard(user_email, device_name, is_admin):
                 <button class="tab active" onclick="switchTab('control')">Manual Control</button>
                 <button class="tab" onclick="switchTab('scheduler')">Scheduler</button>
                 <button class="tab" onclick="switchTab('ota')">Firmware Update</button>
+                <button class="tab" onclick="switchTab('status')">Status</button>
             </div>
 
             <div id="tab-control" class="tab-content active">
@@ -634,6 +672,18 @@ def render_dashboard(user_email, device_name, is_admin):
                         <div id="progressFill" class="progress-fill"></div>
                     </div>
                     <div id="otaStatus" class="ota-status"></div>
+                </section>
+            </div>
+          
+            <div id="tab-status" class="tab-content">
+                <section class="ota-section">
+                    <div class="section-title">Device Status Information</div>
+                    <button id="fetchStatusBtn" class="btn btn-primary" style="margin-bottom: 20px;">
+                    Fetch Latest Status
+                    </button>
+                       <div id="statusDisplay" style="background: white; border: 1px solid var(--border); border-radius: 8px; padding: 20px; min-height: 200px;">
+                       <p style="color: var(--text-mute); text-align: center;">Click "Fetch Latest Status" to retrieve device information</p>
+                    </div>
                 </section>
             </div>
         </main>
@@ -897,6 +947,73 @@ def render_dashboard(user_email, device_name, is_admin):
             }}).join('');
         }}
 
+                function requestDeviceStatus() {{
+            if (!client?.connected || !selectedDevice) {{
+                alert('Not connected or no device selected');
+                return;
+            }}
+            
+            console.log('🔍 Requesting status from device:', selectedDevice);
+            
+            const statusDisplay = document.getElementById('statusDisplay');
+            statusDisplay.innerHTML = '<div class="status-loading">Fetching device status</div>';
+            
+            client.publish(`${{prefix}}/${{selectedDevice}}/rx`, 'status', {{ qos: 1 }});
+            
+            if (statusFetchTimeout) clearTimeout(statusFetchTimeout);
+            statusFetchTimeout = setTimeout(() => {{
+                const currentContent = document.getElementById('statusDisplay').innerHTML;
+                if (currentContent.includes('Fetching device status')) {{
+                    document.getElementById('statusDisplay').innerHTML = 
+                        '<p style="color: var(--danger); text-align: center;">⚠️ No response from device. Please check if device is online.</p>';
+                }}
+            }}, 10000);
+        }}
+
+        function displayStatusInfo(statusData) {{
+            if (statusFetchTimeout) {{
+                clearTimeout(statusFetchTimeout);
+                statusFetchTimeout = null;
+            }}
+            
+            const statusDisplay = document.getElementById('statusDisplay');
+            
+            const statusHtml = `
+                <div class="status-row">
+                    <span class="status-label">Site Name</span>
+                    <span class="status-value highlight">${{statusData.site_name || 'N/A'}}</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Firmware Version</span>
+                    <span class="status-value">${{statusData.firmware_version || 'N/A'}}</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Pump Type</span>
+                    <span class="status-value">${{statusData.pump_type || 'N/A'}}</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Pump Status</span>
+                    <span class="status-value" style="color: ${{statusData.pump_status === 'ON' ? 'var(--success)' : 'var(--danger)'}}; font-weight: 600;">
+                        ${{statusData.pump_status || 'N/A'}}
+                    </span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">IMSI Number</span>
+                    <span class="status-value">${{statusData.imsi || 'N/A'}}</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Uptime</span>
+                    <span class="status-value highlight">${{statusData.uptime || 'N/A'}}</span>
+                </div>
+                <div style="margin-top: 16px; padding: 12px; background: #f8fafc; border-radius: 8px; text-align: center; font-size: 0.875rem; color: var(--text-mute);">
+                    Last updated: ${{new Date().toLocaleString()}}
+                </div>
+            `;
+            
+            statusDisplay.innerHTML = statusHtml;
+            console.log('✅ Status display updated');
+        }}
+
         document.getElementById('onBtn').addEventListener('click', () => {{
             if (client?.connected && selectedDevice && isDeviceAllowed(selectedDevice)) {{
                 client.publish(`${{prefix}}/${{selectedDevice}}/rx`, 'PUMP ON', {{ qos: 1 }});
@@ -1016,7 +1133,47 @@ def render_dashboard(user_email, device_name, is_admin):
                         }}
                     }} catch (e) {{}}
                 }}
+
+                if (parts.length === 3 && parts[2] === 'tx') {{
+                const deviceId = parts[1].toLowerCase();
+                if (!isDeviceAllowed(deviceId)) return;
+                
+                try {{
+                    const data = JSON.parse(message.toString());
+                    
+                    if (data.method === 'status.response') {{
+                        console.log('📊 Status response:', data.params);
+                        
+                        if (!devices[deviceId]) {{
+                            devices[deviceId] = {{ pump_status: false, lastHeartbeat: 0, online: false }};
+                        }}
+                        
+                        devices[deviceId].pump_status = data.params.pump_status === 'ON';
+                        devices[deviceId].firmware_version = data.params.firmware_version;
+                        devices[deviceId].pump_type = data.params.pump_type;
+                        devices[deviceId].imsi = data.params.imsi;
+                        devices[deviceId].uptime = data.params.uptime;
+                        devices[deviceId].lastHeartbeat = Date.now();
+                        devices[deviceId].online = true;
+                        
+                        displayStatusInfo(data.params);
+                        
+                        updateDeviceList();
+                        updatePumpStatus();
+                    }}
+                    else if (data.result && data.result.schedules) {{
+                        schedules = data.result.schedules;
+                        renderSchedules();
+                    }}
+                }} catch (e) {{
+                    console.error('Parse error:', e);
+                }}
+            }}
             }});
+                // Add button listener
+            document.getElementById('fetchStatusBtn').addEventListener('click', () => {{
+            requestDeviceStatus();
+        }});
         }}
 
         connect();
