@@ -25,9 +25,6 @@
 #include <time.h>
 #include <sys/time.h>
 
-#define WIFI_SSID "Acres of Ice"
-#define WIFI_PASS "UkDfPNEj5@"
-
 static bool s_ota_active = false;
 // static esp_ota_handle_t s_ota_handle = 0;
 
@@ -236,7 +233,7 @@ static void rpc_schedule_add(struct mg_rpc_req *r) {
   if (s_schedule_count >= MAX_SCHEDULES) {
     char response[128];
     snprintf(response, sizeof(response), "{\"id\":null,\"error\":\"Maximum schedules reached\"}");
-    
+
     if (s_mqtt_connection) {
       char topic[100];
       struct mg_mqtt_opts pub_opts;
@@ -248,16 +245,69 @@ static void rpc_schedule_add(struct mg_rpc_req *r) {
     }
     return;
   }
-  
+
+  // Parse and validate inputs
+  int64_t start_time = mg_json_get_long(r->frame, "$.params.start", 0);
+  int64_t duration = mg_json_get_long(r->frame, "$.params.duration", 0);
+  int64_t interval = mg_json_get_long(r->frame, "$.params.interval", 0);
+
+  // Validation: start_time must be positive (valid Unix timestamp)
+  if (start_time <= 0) {
+    char response[128];
+    snprintf(response, sizeof(response), "{\"id\":null,\"error\":\"Invalid start_time: must be positive\"}");
+    if (s_mqtt_connection) {
+      char topic[100];
+      struct mg_mqtt_opts pub_opts;
+      memset(&pub_opts, 0, sizeof(pub_opts));
+      pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
+      pub_opts.message = mg_str(response);
+      pub_opts.qos = 1;
+      mg_mqtt_pub(s_mqtt_connection, &pub_opts);
+    }
+    return;
+  }
+
+  // Validation: duration must be between 1 second and 24 hours (86400 seconds)
+  if (duration <= 0 || duration > 86400) {
+    char response[128];
+    snprintf(response, sizeof(response), "{\"id\":null,\"error\":\"Invalid duration: must be 1-86400 seconds\"}");
+    if (s_mqtt_connection) {
+      char topic[100];
+      struct mg_mqtt_opts pub_opts;
+      memset(&pub_opts, 0, sizeof(pub_opts));
+      pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
+      pub_opts.message = mg_str(response);
+      pub_opts.qos = 1;
+      mg_mqtt_pub(s_mqtt_connection, &pub_opts);
+    }
+    return;
+  }
+
+  // Validation: interval must be 0 (one-time) or at least equal to duration
+  if (interval < 0 || (interval > 0 && interval < duration)) {
+    char response[128];
+    snprintf(response, sizeof(response), "{\"id\":null,\"error\":\"Invalid interval: must be 0 or >= duration\"}");
+    if (s_mqtt_connection) {
+      char topic[100];
+      struct mg_mqtt_opts pub_opts;
+      memset(&pub_opts, 0, sizeof(pub_opts));
+      pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
+      pub_opts.message = mg_str(response);
+      pub_opts.qos = 1;
+      mg_mqtt_pub(s_mqtt_connection, &pub_opts);
+    }
+    return;
+  }
+
   pump_schedule_t *sched = &s_schedules[s_schedule_count];
-  
+
   sched->id = mg_json_get_long(r->frame, "$.params.id", 0);
-  sched->start_time = mg_json_get_long(r->frame, "$.params.start", 0);
-  sched->duration = mg_json_get_long(r->frame, "$.params.duration", 0);
-  sched->interval = mg_json_get_long(r->frame, "$.params.interval", 0);
+  sched->start_time = start_time;
+  sched->duration = (uint32_t)duration;
+  sched->interval = (uint32_t)interval;
   mg_json_get_bool(r->frame, "$.params.enabled", &sched->enabled);
   sched->last_run = 0;
-  
+
   s_schedule_count++;
   
   printf("📅 Added schedule: ID=%lu, Start=%lld, Duration=%lu, Interval=%lu\n",
@@ -411,63 +461,6 @@ static void publish_response(struct mg_connection *c, char *buf, size_t len) {
   pub_opts.qos = s_qos;
   mg_mqtt_pub(c, &pub_opts);
 }
-
-
-
-// static void rpc_state_set(struct mg_rpc_req *r) {
-//   // Access mg_str directly using .buf and .len (standard Mongoose)
-//   char msg[128];
-//   int copy_len = (r->frame.len < sizeof(msg) - 1) ? r->frame.len : sizeof(msg) - 1;
-//   memcpy(msg, r->frame.buf, copy_len);  // Use .buf not .ptr
-//   msg[copy_len] = '\0';
-  
-//   printf("MQTT RX: %s\n", msg);
-  
-//   // Standard C string matching
-//   if (strstr(msg, "PUMP ON") != NULL) {
-//     printf("🚿 PUMP ON - GPIO42:1 GPIO43:0\n");
-//     s_device_state.pump_status = true;
-//   gpio_set_level(PUMP_ON_GPIO, 1);
-//   gpio_set_level(PUMP_OFF_GPIO, 0);
-  
-//   vTaskDelay(pdMS_TO_TICKS(5000));
-
-//   gpio_set_level(PUMP_ON_GPIO, 0);
-//   gpio_set_level(PUMP_OFF_GPIO, 0);
-    
-//     // ✅ VERIFY GPIO STATES
-//     printf("GPIO40: %d, GPIO41: %d\n", gpio_get_level(PUMP_ON_GPIO), gpio_get_level(PUMP_OFF_GPIO));
-    
-//     mg_rpc_ok(r, "PUMP ON");
-    
-//   } else if (strstr(msg, "PUMP OFF") != NULL) {
-//     printf("⏹️ PUMP OFF - GPIO42:0 GPIO43:1\n");
-//     s_device_state.pump_status = false;
-//    gpio_set_level(PUMP_ON_GPIO, 0);
-//    gpio_set_level(PUMP_OFF_GPIO, 1);
-  
-//    vTaskDelay(pdMS_TO_TICKS(5000));
-
-//    gpio_set_level(PUMP_ON_GPIO, 0);
-//    gpio_set_level(PUMP_OFF_GPIO, 0);
-    
-//     // ✅ VERIFY GPIO STATES
-//     printf("GPIO40: %d, GPIO41: %d\n", gpio_get_level(PUMP_ON_GPIO), gpio_get_level(PUMP_OFF_GPIO));
-//     }else {
-//     mg_rpc_err(r, 2, "Commands: PUMP ON | PUMP OFF");
-//   }
-// }
-
-// static void rpc_state_get(struct mg_rpc_req *r) {
-//   char json[128];
-//   snprintf(json, sizeof(json), 
-//     "{\"pump_status\":%s}", 
-//     s_device_state.pump_status ? "true" : "false");
-//   mg_rpc_ok(r, "%s", json);
-// }
-
-
-
 
 static void rpc_ota_upload(struct mg_rpc_req *r) {
   long ofs = mg_json_get_long(r->frame, "$.params.offset", -1);
