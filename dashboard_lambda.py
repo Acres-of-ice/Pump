@@ -41,8 +41,8 @@ ADMIN_EMAILS = [
 # WebSocket URL for browser connections (HiveMQ public broker)
 MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt"
 MQTT_TOPIC_PREFIX = "pump"
-MQTT_USERNAME = ""
-MQTT_PASSWORD = ""
+# MQTT_USERNAME = ""
+# MQTT_PASSWORD = ""
 
 # Cache for JWKS keys
 _jwks_cache = None
@@ -651,8 +651,8 @@ def render_dashboard(user_email, device_name, is_admin):
             clean: true,
             connectTimeout: 5000,
             clientId: 'pump-' + USER_CONFIG.device + '-' + Math.random().toString(16).substr(2, 8),
-            username: '{MQTT_USERNAME}',
-            password: '{MQTT_PASSWORD}',
+            # username: '{MQTT_USERNAME}',
+            # password: '{MQTT_PASSWORD}',
         }};
 
         let client = null;
