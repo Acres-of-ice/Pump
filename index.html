@@ -449,14 +449,12 @@
 
     <script>
 
-        const brokerUrl = "mqtt://44.194.157.172:1883"
+        const brokerUrl = "mqtt://broker.hivemq.com:1883"
         const prefix = 'pump';
         const TIMEOUT_MS = 30000; // 30 seconds
         const GRACE_PERIOD = 5000; // 5 second grace period on first load
         
    const options = {
-       username: 'aoi',      
-       password: '4201',     
        clean: true,
        connectTimeout: 5000,
        clientId: 'pump-controller-' + Math.random().toString(16).substr(2, 8),

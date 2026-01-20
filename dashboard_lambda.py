@@ -38,11 +38,11 @@ ADMIN_EMAILS = [
 ]
 
 # MQTT Configuration
-# WebSocket URL for browser connections (browsers can't use mqtt://, need ws://)
-MQTT_BROKER_URL = "ws://44.194.157.172:9001/mqtt"
+# WebSocket URL for browser connections (HiveMQ public broker)
+MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt"
 MQTT_TOPIC_PREFIX = "pump"
-MQTT_USERNAME = "aoi"
-MQTT_PASSWORD = "4201"
+MQTT_USERNAME = ""
+MQTT_PASSWORD = ""
 
 # Cache for JWKS keys
 _jwks_cache = None
