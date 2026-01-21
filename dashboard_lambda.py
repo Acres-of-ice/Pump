@@ -233,6 +233,7 @@ def render_dashboard(user_email, device_name, is_admin):
             color: var(--text);
             min-height: 100vh;
             line-height: 1.5;
+            overflow-x: hidden;
         }}
         .app-header {{
             max-width: 1280px;
@@ -542,10 +543,33 @@ def render_dashboard(user_email, device_name, is_admin):
         .ota-status.success {{ color: var(--success); }}
         .ota-status.error {{ color: var(--danger); }}
         @media (max-width: 960px) {{
-            .dashboard {{ grid-template-columns: 1fr; }}
-            .sidebar {{ order: -1; }}
-            .buttons {{ flex-direction: column; align-items: center; }}
-            .form-grid {{ grid-template-columns: 1fr; }}
+        .dashboard {{ 
+          grid-template-columns: 1fr;
+          gap: 16px;
+          }}
+         .sidebar {{ 
+            order: -1;
+            max-width: 100%;
+          }}
+         .buttons {{ 
+            flex-direction: column; 
+            align-items: center; 
+          }}
+          .form-grid {{ 
+            grid-template-columns: 1fr; 
+          }}
+           .control-btn {{
+             width: 100px;
+             height: 100px;
+          }}
+           .tabs {{
+             overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+           }}
+          .tab {{
+            white-space: nowrap;
+            padding: 12px 16px;
+           }}
         }}
         .status-row {{
             padding: 12px;
@@ -697,6 +721,8 @@ def render_dashboard(user_email, device_name, is_admin):
         const INITIAL_WAIT_TIMEOUT = 30000;
         const chunkSize = 4096;
 
+        const KNOWN_DEVICES = ['contact', 'shey'];
+
         const options = {{
             clean: true,
             connectTimeout: 5000,
@@ -784,6 +810,9 @@ def render_dashboard(user_email, device_name, is_admin):
                 let statusClass = 'indicator-unknown';
                 if (device.lastHeartbeat > 0) {{
                     statusClass = device.online ? 'indicator-online' : 'indicator-offline';
+                }}else if (device.online === false) {{
+                  // Device was marked offline after timeout
+                   statusClass = 'indicator-offline';
                 }}
                 indicator.className = 'device-indicator ' + statusClass;
 
@@ -1045,6 +1074,36 @@ def render_dashboard(user_email, device_name, is_admin):
            }}, INITIAL_WAIT_TIMEOUT);
        }}
 
+       function requestStatusFromAllDevices() {{
+          if (!client?.connected) return;
+    
+          console.log('📡 Requesting status from devices on load...');
+    
+          if (USER_CONFIG.isAdmin) {{
+          // Send status request to all known devices
+          KNOWN_DEVICES.forEach(deviceId => {{
+            client.publish(`${{prefix}}/${{deviceId}}/rx`, 'status', {{ qos: 1 }});
+            console.log(`📤 Status request sent to: ${{deviceId}}`);
+          }});
+        
+          // Set timeout to mark devices as offline if no response
+             setTimeout(() => {{
+             KNOWN_DEVICES.forEach(deviceId => {{
+                const device = devices[deviceId];
+                if (device && device.lastHeartbeat === 0) {{
+                    console.log(`❌ No status response from: ${{deviceId}} - marking offline`);
+                    device.online = false;
+                    updateDeviceList();
+                }}
+             }});
+             }}, 5000); // Wait 5 seconds for responses
+          }} else {{
+             // Send status request to user's device
+             client.publish(`${{prefix}}/${{USER_CONFIG.device}}/rx`, 'status', {{ qos: 1 }});
+             console.log(`📤 Status request sent to: ${{USER_CONFIG.device}}`);
+             }}
+        }}
+
         document.getElementById('onBtn').addEventListener('click', () => {{
             if (client?.connected && selectedDevice && isDeviceAllowed(selectedDevice)) {{
                 client.publish(`${{prefix}}/${{selectedDevice}}/rx`, 'PUMP ON', {{ qos: 1 }});
@@ -1113,23 +1172,45 @@ def render_dashboard(user_email, device_name, is_admin):
                 document.getElementById('connectionStatus').className = 'connection connected';
 
                 if (USER_CONFIG.isAdmin) {{
-                    client.subscribe(`${{prefix}}/+/status`);
-                    client.subscribe(`${{prefix}}/+/tx`);
-                }} else {{
-                    client.subscribe(`${{prefix}}/${{USER_CONFIG.device}}/status`);
-                    client.subscribe(`${{prefix}}/${{USER_CONFIG.device}}/tx`);
-                    if (!devices[USER_CONFIG.device]) {{
-                        devices[USER_CONFIG.device] = {{ pump_status: false, lastHeartbeat: 0, online: false }};
+                // Pre-populate all known devices as offline initially
+                   KNOWN_DEVICES.forEach(deviceId => {{
+                   if (!devices[deviceId]) {{
+                       devices[deviceId] = {{ 
+                       pump_status: false, 
+                       lastHeartbeat: 0, 
+                       online: false 
+                     }};
                     }}
-                    selectedDevice = USER_CONFIG.device;
+                   }});
+        
+                   client.subscribe(`${{prefix}}/+/status`);
+                   client.subscribe(`${{prefix}}/+/tx`);
+        
+                   // Request status from all devices after subscribing
+                   setTimeout(() => {{
+                      requestStatusFromAllDevices();
+                    }}, 500); // Small delay to ensure subscription is complete
+        
+                }} else {{
+                   client.subscribe(`${{prefix}}/${{USER_CONFIG.device}}/status`);
+                   client.subscribe(`${{prefix}}/${{USER_CONFIG.device}}/tx`);
+                   if (!devices[USER_CONFIG.device]) {{
+                       devices[USER_CONFIG.device] = {{ pump_status: false, lastHeartbeat: 0, online: false }};
+                   }}
+                   selectedDevice = USER_CONFIG.device;
 
-                    startInitialDeviceWaitTimeout();
-                }}
+                   // Request status from user's device
+                   setTimeout(() => {{
+                   requestStatusFromAllDevices();
+                   }}, 500);
+        
+                   startInitialDeviceWaitTimeout();
+                  }}
 
-                dashboardConnectTime = Date.now();
-                updateDeviceList();
-                updatePumpStatus();
-                startTimeoutChecker();
+            dashboardConnectTime = Date.now();
+            updateDeviceList();
+            updatePumpStatus();
+            startTimeoutChecker();
             }});
 
             client.on('error', (err) => {{
