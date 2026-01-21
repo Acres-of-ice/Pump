@@ -3,9 +3,13 @@ Authenticated MQTT Dashboard Lambda
 Serves the pump controller dashboard with Cognito authentication and device filtering.
 - Regular users only see their assigned device (derived from email username)
 - Admins see all devices
+- Session maintained via HTTP-only cookies (tokens stored for 1 hour)
 
 Routes:
-- /callback    -> OAuth callback, validate token, serve dashboard
+- /           -> Redirect to /dashboard if authenticated, else to login
+- /callback   -> OAuth callback, exchange code for tokens, set cookies, redirect to /dashboard
+- /dashboard  -> Serve dashboard if valid token cookie exists
+- /logout     -> Clear cookies and redirect to Cognito logout
 """
 
 import json
@@ -127,9 +131,9 @@ def get_user_info(email):
 # HTTP RESPONSES
 # =============================================================================
 
-def html_response(status_code, body):
+def html_response(status_code, body, cookies=None):
     """Return an HTML response."""
-    return {
+    response = {
         "statusCode": status_code,
         "headers": {
             "Content-Type": "text/html; charset=utf-8",
@@ -137,6 +141,46 @@ def html_response(status_code, body):
         },
         "body": body
     }
+    if cookies:
+        response["multiValueHeaders"] = {"Set-Cookie": cookies}
+    return response
+
+
+def redirect_response(location, cookies=None):
+    """Return a redirect response."""
+    response = {
+        "statusCode": 302,
+        "headers": {
+            "Location": location,
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+        },
+        "body": ""
+    }
+    if cookies:
+        response["multiValueHeaders"] = {"Set-Cookie": cookies}
+    return response
+
+
+def parse_cookies(event):
+    """Parse cookies from the request."""
+    cookies = {}
+    cookie_header = ""
+
+    # Handle both API Gateway v1 and v2 formats
+    headers = event.get("headers", {}) or {}
+    if "cookie" in headers:
+        cookie_header = headers["cookie"]
+    elif "Cookie" in headers:
+        cookie_header = headers["Cookie"]
+
+    if cookie_header:
+        for item in cookie_header.split(";"):
+            item = item.strip()
+            if "=" in item:
+                key, value = item.split("=", 1)
+                cookies[key.strip()] = value.strip()
+
+    return cookies
 
 
 def render_error_page(title, message):
@@ -740,7 +784,7 @@ def render_dashboard(user_email, device_name, is_admin):
         let initialDeviceWaitTimeout = null;
 
         function logout() {{
-            window.location.href = '{COGNITO_DOMAIN}/logout?client_id={COGNITO_APP_CLIENT_ID}&logout_uri=' + encodeURIComponent('{API_BASE_URL}');
+            window.location.href = '{API_BASE_URL}/logout';
         }}
 
         function isDeviceAllowed(deviceId) {{
@@ -1308,48 +1352,113 @@ def render_dashboard(user_email, device_name, is_admin):
 def lambda_handler(event, context):
     """
     Lambda handler for authenticated MQTT dashboard.
-    Only handles /callback route.
+    Handles:
+    - /callback -> OAuth callback, validate token, set cookie, redirect to /dashboard
+    - /dashboard -> Serve dashboard if valid token cookie exists
+    - / -> Redirect to login
     """
     try:
         path = event.get("path", "") or event.get("rawPath", "") or "/"
-
-        # Only handle /callback
-        if path != "/callback":
-            return html_response(404, render_error_page("Not Found", "Use the login link to access the dashboard."))
-
         query_params = event.get("queryStringParameters") or {}
-        code = query_params.get("code")
+        cookies = parse_cookies(event)
 
-        if not code:
-            return html_response(400, render_error_page("Error", "No authorization code provided"))
+        # Handle /dashboard - serve dashboard if valid token exists
+        if path == "/dashboard":
+            id_token = cookies.get("id_token")
+            access_token = cookies.get("access_token")
 
-        # Exchange code for tokens
-        try:
-            token_response = exchange_code_for_tokens(code)
-        except Exception as e:
-            return html_response(401, render_error_page("Authentication Failed", f"Could not exchange code: {str(e)}"))
+            if not id_token:
+                # No token, redirect to login
+                return redirect_response(get_login_url())
 
-        id_token = token_response.get("id_token")
-        access_token = token_response.get("access_token")
+            # Validate token
+            try:
+                claims = validate_token(id_token, access_token)
+            except JWTError:
+                # Invalid/expired token, redirect to login
+                return redirect_response(get_login_url())
 
-        if not id_token:
-            return html_response(400, render_error_page("Error", "Failed to get ID token"))
+            # Get user info
+            email = claims.get("email")
+            if not email:
+                return redirect_response(get_login_url())
 
-        # Validate token
-        try:
-            claims = validate_token(id_token, access_token)
-        except JWTError as e:
-            return html_response(401, render_error_page("Invalid Token", str(e)))
+            device_name, is_admin = get_user_info(email)
 
-        # Get user info
-        email = claims.get("email")
-        if not email:
-            return html_response(400, render_error_page("Error", "No email in token"))
+            # Serve dashboard
+            return html_response(200, render_dashboard(email, device_name, is_admin))
 
-        device_name, is_admin = get_user_info(email)
+        # Handle /callback - OAuth callback
+        if path == "/callback":
+            code = query_params.get("code")
 
-        # Serve dashboard
-        return html_response(200, render_dashboard(email, device_name, is_admin))
+            if not code:
+                # No code but maybe we have a valid token already
+                id_token = cookies.get("id_token")
+                if id_token:
+                    try:
+                        validate_token(id_token, cookies.get("access_token"))
+                        return redirect_response(f"{API_BASE_URL}/dashboard")
+                    except JWTError:
+                        pass
+                return redirect_response(get_login_url())
+
+            # Exchange code for tokens
+            try:
+                token_response = exchange_code_for_tokens(code)
+            except Exception as e:
+                return html_response(401, render_error_page("Authentication Failed", f"Could not exchange code: {str(e)}"))
+
+            id_token = token_response.get("id_token")
+            access_token = token_response.get("access_token")
+
+            if not id_token:
+                return html_response(400, render_error_page("Error", "Failed to get ID token"))
+
+            # Validate token
+            try:
+                claims = validate_token(id_token, access_token)
+            except JWTError as e:
+                return html_response(401, render_error_page("Invalid Token", str(e)))
+
+            # Get user info
+            email = claims.get("email")
+            if not email:
+                return html_response(400, render_error_page("Error", "No email in token"))
+
+            # Set cookies and redirect to dashboard (removes code from URL)
+            # Cookie expires in 1 hour (matches typical Cognito token expiry)
+            cookie_options = "Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=3600"
+            cookies_to_set = [
+                f"id_token={id_token}; {cookie_options}",
+                f"access_token={access_token}; {cookie_options}",
+            ]
+
+            return redirect_response(f"{API_BASE_URL}/dashboard", cookies_to_set)
+
+        # Handle /logout - clear cookies and redirect to Cognito logout
+        if path == "/logout":
+            # Clear cookies by setting them to expire immediately
+            clear_cookies = [
+                "id_token=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
+                "access_token=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
+            ]
+            cognito_logout_url = f"{COGNITO_DOMAIN}/logout?client_id={COGNITO_APP_CLIENT_ID}&logout_uri={urllib.parse.quote(API_BASE_URL)}"
+            return redirect_response(cognito_logout_url, clear_cookies)
+
+        # Handle root / - redirect to login or dashboard
+        if path == "/" or path == "":
+            id_token = cookies.get("id_token")
+            if id_token:
+                try:
+                    validate_token(id_token, cookies.get("access_token"))
+                    return redirect_response(f"{API_BASE_URL}/dashboard")
+                except JWTError:
+                    pass
+            return redirect_response(get_login_url())
+
+        # Unknown path
+        return html_response(404, render_error_page("Not Found", "Use the login link to access the dashboard."))
 
     except Exception as e:
         return html_response(500, render_error_page("Error", f"Internal error: {str(e)}"))
