@@ -43,14 +43,14 @@ menu "Pump Controller Configuration"
 
    	choice PUMP_TYPE
 		bool "Pump Type"
-		default Borewell_Pump
+		default Borewell
 		help
 			Select the type of pump depending on the site.
 
-		config Borewell_Pump
-			bool "Borewell Pump"
-		config 1HP_PUMP
-			bool "1 HP Pump"
+		config Borewell
+			bool "Borewell"
+		config 1HP
+			bool "1 HP"
     endchoice
 
     config MQTT_BROKER_URL

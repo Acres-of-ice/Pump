@@ -29,10 +29,10 @@ static bool s_ota_active = false;
 // static esp_ota_handle_t s_ota_handle = 0;
 
 // Determine pump type from Kconfig
-#if defined(CONFIG_Borewell_Pump)
-    #define PUMP_TYPE "Borewell Pump"
-#elif defined(CONFIG_1HP_PUMP)
-    #define PUMP_TYPE "1 HP Pump"
+#if defined(CONFIG_Borewell)
+    #define PUMP_TYPE "Borewell"
+#elif defined(CONFIG_1HP)
+    #define PUMP_TYPE "1 HP"
 #else
     #define PUMP_TYPE "Unknown"
 #endif
