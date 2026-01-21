@@ -785,7 +785,6 @@ void app_main() {
   vTaskDelay(pdMS_TO_TICKS(1000));
 
 
-
     esp_err_t ret = sim_init();
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "SIM initialization failed");

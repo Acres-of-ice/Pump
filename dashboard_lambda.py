@@ -331,6 +331,14 @@ def render_dashboard(user_email, device_name, is_admin):
             height: fit-content;
             box-shadow: var(--shadow-sm);
         }}
+        .firmware-update-bottom {{
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            box-shadow: var(--shadow-sm);
+            grid-column: 1 / -1;
+        }}
         .sidebar-header {{
             font-size: 0.875rem;
             font-weight: 600;
@@ -338,6 +346,32 @@ def render_dashboard(user_email, device_name, is_admin):
             margin-bottom: 16px;
             text-transform: uppercase;
             letter-spacing: 0.05em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }}
+
+        .connection-indicator {{
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }}
+        .connection-indicator.connected {{
+            background: var(--success);
+            box-shadow: 0 0 8px var(--success);
+            animation: pulse-green 2s infinite;
+        }}
+        .connection-indicator.disconnected {{
+            background: var(--danger);
+        }}
+        .connection-indicator.connecting {{
+            background: var(--warning);
+            animation: pulse-yellow 1s infinite;
+        }}
+        @keyframes pulse-yellow {{
+            0%, 100% {{ opacity: 1; }}
+            50% {{ opacity: 0.5; }}
         }}
         .device-list {{ list-style: none; }}
         .device-item {{
@@ -550,10 +584,16 @@ def render_dashboard(user_email, device_name, is_admin):
             margin-left: 16px;
         }}
         .btn-small {{ padding: 6px 12px; font-size: 0.875rem; }}
+        .sidebar-section {{
+            margin-bottom: 32px; 
+        }}
+        .sidebar-section:last-child {{
+           margin-bottom: 0;
+        }}
         .ota-section {{
             background: #f8fafc;
             border-radius: var(--radius);
-            padding: 24px;
+            padding: 20px;
         }}
         .file-input {{
             padding: 12px;
@@ -564,6 +604,7 @@ def render_dashboard(user_email, device_name, is_admin):
             margin-bottom: 16px;
             display: block;
             width: 100%;
+            font-size: 0.875rem;
         }}
         .progress-bar {{
             height: 8px;
@@ -592,7 +633,6 @@ def render_dashboard(user_email, device_name, is_admin):
           gap: 16px;
           }}
          .sidebar {{ 
-            order: -1;
             max-width: 100%;
           }}
          .buttons {{ 
@@ -664,19 +704,23 @@ def render_dashboard(user_email, device_name, is_admin):
     </header>
 
     <div class="dashboard">
-        <aside class="sidebar">
-            <div class="sidebar-header">Devices</div>
+    <aside class="sidebar">
+        <!-- Devices Section -->
+        <div class="sidebar-section">
+            <div class="sidebar-header">
+                Devices
+                <span class="connection-indicator connecting" id="mqttConnectionIndicator"></span>
+            </div>
             <ul class="device-list" id="deviceList"></ul>
-        </aside>
+        </div>
+    </aside>
 
         <main class="main-panel">
-            <div class="connection" id="connectionStatus">Connecting...</div>
 
             <div class="tabs">
                 <button class="tab active" onclick="switchTab('control')">Manual Control</button>
-                <button class="tab" onclick="switchTab('scheduler')">Scheduler</button>
-                <button class="tab" onclick="switchTab('ota')">Firmware Update</button>
                 <button class="tab" onclick="switchTab('status')">Status</button>
+                <button class="tab" onclick="switchTab('scheduler')">Scheduler</button>
             </div>
 
             <div id="tab-control" class="tab-content active">
@@ -730,17 +774,6 @@ def render_dashboard(user_email, device_name, is_admin):
                 </div>
             </div>
 
-            <div id="tab-ota" class="tab-content">
-                <section class="ota-section">
-                    <div class="section-title">Firmware Update (OTA)</div>
-                    <input type="file" id="firmwareFile" accept=".bin" class="file-input">
-                    <button id="uploadBtn" class="btn btn-primary" disabled>Start OTA Upload</button>
-                    <div class="progress-bar">
-                        <div id="progressFill" class="progress-fill"></div>
-                    </div>
-                    <div id="otaStatus" class="ota-status"></div>
-                </section>
-            </div>
           
             <div id="tab-status" class="tab-content">
                 <section class="ota-section">
@@ -754,7 +787,20 @@ def render_dashboard(user_email, device_name, is_admin):
                 </section>
             </div>
         </main>
-    </div>
+                    <!-- Firmware Update Section - Bottom of Dashboard -->
+            <div class="firmware-update-bottom">
+                <div class="sidebar-header">Firmware Update</div>
+                <div class="ota-section">
+                    <input type="file" id="firmwareFile" accept=".bin" class="file-input">
+                    <button id="uploadBtn" class="btn btn-primary" style="width: 100%; font-size: 0.875rem;" disabled>Upload</button>
+                    <div class="progress-bar">
+                        <div id="progressFill" class="progress-fill"></div>
+                    </div>
+                    <div id="otaStatus" class="ota-status"></div>
+                </div>
+            </div>
+        </div>
+
 
     <script>
         const USER_CONFIG = {user_config};
@@ -1212,8 +1258,8 @@ def render_dashboard(user_email, device_name, is_admin):
             client = mqtt.connect(brokerUrl, options);
 
             client.on('connect', () => {{
-                document.getElementById('connectionStatus').textContent = 'Connected';
-                document.getElementById('connectionStatus').className = 'connection connected';
+                const indicator = document.getElementById('mqttConnectionIndicator');
+                indicator.className = 'connection-indicator connected';
 
                 if (USER_CONFIG.isAdmin) {{
                 // Pre-populate all known devices as offline initially
@@ -1258,13 +1304,13 @@ def render_dashboard(user_email, device_name, is_admin):
             }});
 
             client.on('error', (err) => {{
-                document.getElementById('connectionStatus').textContent = `Failed: ${{err.message}}`;
-                document.getElementById('connectionStatus').className = 'connection disconnected';
+                const indicator = document.getElementById('mqttConnectionIndicator');
+                indicator.className = 'connection-indicator disconnected';
             }});
 
             client.on('close', () => {{
-                document.getElementById('connectionStatus').textContent = 'Disconnected';
-                document.getElementById('connectionStatus').className = 'connection disconnected';
+                const indicator = document.getElementById('mqttConnectionIndicator');
+                indicator.className = 'connection-indicator disconnected';
             }});
 
             client.on('message', (topic, message) => {{
