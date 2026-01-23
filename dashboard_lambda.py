@@ -829,6 +829,8 @@ def render_dashboard(user_email, device_name, is_admin):
         let statusFetchTimeout = null;
         let initialDeviceWaitTimeout = null;
 
+        let otaAckReceived = false;
+
         function logout() {{
             window.location.href = '{API_BASE_URL}/logout';
         }}
@@ -1210,49 +1212,71 @@ def render_dashboard(user_email, device_name, is_admin):
             document.getElementById('uploadBtn').disabled = !e.target.files[0];
         }});
 
-        document.getElementById('uploadBtn').addEventListener('click', async () => {{
-            const file = document.getElementById('firmwareFile').files[0];
-            if (!file || !selectedDevice) return;
+document.getElementById('uploadBtn').addEventListener('click', async () => {{
+    const file = document.getElementById('firmwareFile').files[0];
+    if (!file || !selectedDevice) return;
 
-            const progressFill = document.getElementById('progressFill');
-            const otaStatus = document.getElementById('otaStatus');
-            const uploadBtn = document.getElementById('uploadBtn');
+    const progressFill = document.getElementById('progressFill');
+    const otaStatus = document.getElementById('otaStatus');
+    const uploadBtn = document.getElementById('uploadBtn');
 
-            uploadBtn.disabled = true;
-            otaStatus.className = 'ota-status waiting';
-            otaStatus.textContent = 'Starting upload...';
-            progressFill.style.width = '0%';
+    uploadBtn.disabled = true;
+    otaStatus.className = 'ota-status waiting';
+    otaStatus.textContent = 'Starting upload...';
+    progressFill.style.width = '0%';
 
-            try {{
-                const uint8Array = new Uint8Array(await file.arrayBuffer());
-                const total = uint8Array.length;
-                let offset = 0;
+    try {{
+        const uint8Array = new Uint8Array(await file.arrayBuffer());
+        const total = uint8Array.length;
+        let offset = 0;
 
-                while (offset < total) {{
-                    const chunk = uint8Array.slice(offset, offset + chunkSize);
-                    const base64Chunk = btoa(String.fromCharCode.apply(null, chunk));
+        console.log('🚀 Starting OTA upload:', total, 'bytes to device:', selectedDevice);
 
-                    client.publish(`${{prefix}}/${{selectedDevice}}/rx`, JSON.stringify({{
-                        method: "ota.upload",
-                        params: {{ offset, total, chunk: base64Chunk }}
-                    }}), {{ qos: 1 }});
+        while (offset < total) {{
+            const chunk = uint8Array.slice(offset, offset + chunkSize);
+            const base64Chunk = btoa(String.fromCharCode.apply(null, chunk));
 
-                    offset += chunk.length;
-                    const progress = (offset / total) * 100;
-                    progressFill.style.width = progress + '%';
-                    otaStatus.textContent = `Uploading: ${{progress.toFixed(1)}}%`;
-                    await new Promise(r => setTimeout(r, 50));
-                }}
+            otaAckReceived = false;
 
-                otaStatus.className = 'ota-status success';
-                otaStatus.textContent = 'Upload complete! Device rebooting...';
-                setTimeout(() => {{ uploadBtn.disabled = false; }}, 5000);
-            }} catch (error) {{
-                otaStatus.className = 'ota-status error';
-                otaStatus.textContent = 'Upload failed: ' + error.message;
-                uploadBtn.disabled = false;
+            const payload = JSON.stringify({{
+                method: "ota.upload",
+                params: {{ offset, total, chunk: base64Chunk }}
+            }});
+
+            console.log(`📤 Sending chunk at offset ${{offset}}, size: ${{chunk.length}}`);
+            
+            client.publish(`${{prefix}}/${{selectedDevice}}/rx`, payload, {{ qos: 1 }});
+
+            let ackWaitTime = 0;
+            const maxWait = 15000; // Increased to 15 seconds
+            while (!otaAckReceived && ackWaitTime < maxWait) {{
+                await new Promise(r => setTimeout(r, 100));
+                ackWaitTime += 100;
             }}
-        }});
+            
+            if (!otaAckReceived) {{
+                console.error('❌ No ACK received for offset', offset);
+                throw new Error('Timeout waiting for ACK at offset ' + offset);
+            }}
+
+            console.log('✅ ACK received for offset', offset);
+            offset += chunk.length;
+            const progress = (offset / total) * 100;
+            progressFill.style.width = progress + '%';
+            otaStatus.textContent = 'Uploading: ' + progress.toFixed(1) + '% (' + offset + '/' + total + ' bytes)';
+        }}
+
+        console.log('🎉 Upload complete!');
+        otaStatus.className = 'ota-status success';
+        otaStatus.textContent = 'Upload complete! Waiting for device to reboot...';
+        setTimeout(() => {{ uploadBtn.disabled = false; }}, 5000);
+    }} catch (error) {{
+        console.error('💥 OTA upload error:', error);
+        otaStatus.className = 'ota-status error';
+        otaStatus.textContent = 'Upload failed: ' + error.message;
+        uploadBtn.disabled = false;
+    }}
+}});
 
         function connect() {{
             client = mqtt.connect(brokerUrl, options);
@@ -1369,6 +1393,16 @@ def render_dashboard(user_email, device_name, is_admin):
                         
                         updateDeviceList();
                         updatePumpStatus();
+                    }}
+                    else if (data.method === 'ota.ack') {{
+                    console.log('📦 OTA ACK received:', data.params);
+                    otaAckReceived = true;
+                    }}
+                    else if (data.method === 'ota.complete') {{
+                    console.log('✅ OTA Complete, device rebooting');
+                    const otaStatus = document.getElementById('otaStatus');
+                    otaStatus.className = 'ota-status success';
+                    otaStatus.textContent = 'Firmware update successful! Device is rebooting...';
                     }}
                     else if (data.result && data.result.schedules) {{
                         schedules = data.result.schedules;

@@ -509,39 +509,98 @@ static void rpc_ota_upload(struct mg_rpc_req *r) {
 
   if (buf == NULL) {
     ESP_LOGE(TAG_OTA, "Buffer is NULL");
-    mg_rpc_err(r, 1, "Error processing the binary chunk.");
+    
+    // ✅ FIX: Manually publish error response
+    char response[128];
+    snprintf(response, sizeof(response), 
+      "{\"method\":\"ota.ack\",\"params\":{\"offset\":%ld,\"status\":\"error\"}}",
+      ofs);
+    
+    if (s_mqtt_connection) {
+      char topic[100];
+      struct mg_mqtt_opts pub_opts;
+      memset(&pub_opts, 0, sizeof(pub_opts));
+      pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
+      pub_opts.message = mg_str(response);
+      pub_opts.qos = 1;
+      mg_mqtt_pub(s_mqtt_connection, &pub_opts);
+    }
   } else {
     bool success = true;
 
     if (ofs < 0 || tot < 0) {
       ESP_LOGE(TAG_OTA, "Invalid params");
-      mg_rpc_err(r, 1, "offset and total not set");
       success = false;
     } else if (ofs == 0 && mg_ota_begin((size_t) tot) == false) {
       ESP_LOGE(TAG_OTA, "mg_ota_begin failed");
-      mg_rpc_err(r, 1, "mg_ota_begin(%ld) failed", tot);
       mg_ota_end();
       success = false;
     } else if (len > 0 && mg_ota_write(buf, len) == false) {
       ESP_LOGE(TAG_OTA, "mg_ota_write failed");
-      mg_rpc_err(r, 1, "mg_ota_write(%d) @%ld failed", len, ofs);
       mg_ota_end();
       success = false;
     } else if (ofs + len >= tot && mg_ota_end() == false) {
       ESP_LOGE(TAG_OTA, "mg_ota_end failed");
-      mg_rpc_err(r, 1, "mg_ota_end() failed");
       success = false;
     }
 
+    // ✅ FIX: Manually publish ACK for every chunk
     if (success) {
       ESP_LOGI(TAG_OTA, "Progress: %.1f%% (%ld/%ld)", (ofs + len) * 100.0 / tot, ofs + len, tot);
-      mg_rpc_ok(r, "%m", MG_ESC("ok"));
+      
+      // Send ACK response
+      char response[128];
+      snprintf(response, sizeof(response), 
+        "{\"method\":\"ota.ack\",\"params\":{\"offset\":%ld,\"status\":\"ok\"}}",
+        ofs);
+      
+      if (s_mqtt_connection) {
+        char topic[100];
+        struct mg_mqtt_opts pub_opts;
+        memset(&pub_opts, 0, sizeof(pub_opts));
+        pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
+        pub_opts.message = mg_str(response);
+        pub_opts.qos = 1;
+        mg_mqtt_pub(s_mqtt_connection, &pub_opts);
+        ESP_LOGI(TAG_OTA, "ACK sent for offset %ld", ofs);
+      }
 
-      // If last chunk, reboot to apply new firmware
+      // If last chunk, send completion message and reboot
       if (ofs + len >= tot) {
-        ESP_LOGI(TAG_OTA, "OTA COMPLETE! Rebooting in 2 seconds...");
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        ESP_LOGI(TAG_OTA, "OTA COMPLETE! Sending completion message...");
+        
+        char complete_msg[128];
+        snprintf(complete_msg, sizeof(complete_msg), 
+          "{\"method\":\"ota.complete\",\"params\":{\"status\":\"rebooting\"}}");
+        
+        if (s_mqtt_connection) {
+          char topic[100];
+          struct mg_mqtt_opts pub_opts;
+          memset(&pub_opts, 0, sizeof(pub_opts));
+          pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
+          pub_opts.message = mg_str(complete_msg);
+          pub_opts.qos = 1;
+          mg_mqtt_pub(s_mqtt_connection, &pub_opts);
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(1000)); // Give time for message to send
         esp_restart();
+      }
+    } else {
+      // Send error ACK
+      char response[128];
+      snprintf(response, sizeof(response), 
+        "{\"method\":\"ota.ack\",\"params\":{\"offset\":%ld,\"status\":\"error\"}}",
+        ofs);
+      
+      if (s_mqtt_connection) {
+        char topic[100];
+        struct mg_mqtt_opts pub_opts;
+        memset(&pub_opts, 0, sizeof(pub_opts));
+        pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
+        pub_opts.message = mg_str(response);
+        pub_opts.qos = 1;
+        mg_mqtt_pub(s_mqtt_connection, &pub_opts);
       }
     }
 
@@ -562,6 +621,11 @@ void my_mqtt_tls_init(struct mg_connection *c) {
 void my_mqtt_on_connect(struct mg_connection *c, int code) {
   char topic[100];
   struct mg_mqtt_opts opts = {0};
+  
+  // ✅ CRITICAL FIX: Store the connection globally so rpc_ota_upload can use it
+  s_mqtt_connection = c;
+  ESP_LOGI(TAG_MQTT, "MQTT connection stored: %p", c);
+  
   opts.qos = 1;
   opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "rx"));
   mg_mqtt_sub(c, &opts);
@@ -696,6 +760,11 @@ void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_
   }
 
   mg_iobuf_free(&io);
+}
+
+void my_mqtt_set_connection(struct mg_connection *c) {
+  s_mqtt_connection = c;
+  ESP_LOGI(TAG_MQTT, "MQTT connection stored: %p", c);
 }
 struct mg_connection *my_mqtt_connect(mg_event_handler_t fn) {
   const char *url = WIZARD_MQTT_URL;
