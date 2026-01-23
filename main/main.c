@@ -59,7 +59,10 @@ extern void wifi_init(const char *ssid, const char *pass);
 static esp_timer_handle_t s_heartbeat_timer = NULL;
 
 #define TLS_CA ""
-#define FIRMWARE_VERSION "1.0.2"
+
+
+#define PROJECT_VERSION "0.0.0"  
+
 
 static struct mg_rpc *s_rpc = NULL;
 static uint8_t s_qos = 1;
@@ -83,7 +86,7 @@ struct device_state {
   bool pump_status;            // true = ON, false = OFF
   char firmware_version[20];
 };
-static struct device_state s_device_state = {false, FIRMWARE_VERSION};
+static struct device_state s_device_state = {false, PROJECT_VERSION};
 
 // Scheduler structures
 #define MAX_SCHEDULES 10
@@ -145,13 +148,20 @@ static void pump_turn_on(uint32_t duration_seconds) {
   ESP_LOGI(TAG_SCHED, "Turning pump ON for %lu seconds", duration_seconds);
   
   s_device_state.pump_status = true;
-  gpio_set_level(PUMP_ON_GPIO, 1);
-  gpio_set_level(PUMP_OFF_GPIO, 0);
 
-  vTaskDelay(pdMS_TO_TICKS(5000));
+  #ifdef CONFIG_BORWELL
+    gpio_set_level(PUMP_ON_GPIO, 0);
+    gpio_set_level(PUMP_OFF_GPIO, 1);
 
-  gpio_set_level(PUMP_ON_GPIO, 0);
-  gpio_set_level(PUMP_OFF_GPIO, 0);
+    vTaskDelay(pdMS_TO_TICKS(5000));
+
+    gpio_set_level(PUMP_ON_GPIO, 0);
+    gpio_set_level(PUMP_OFF_GPIO, 0);
+  #endif
+
+  #ifdef CONFIG_1HP
+    gpio_set_level(PUMP_ON_GPIO, 1);
+  #endif
 
   
   // Publish status update
@@ -176,13 +186,19 @@ static void pump_turn_off_callback(void *arg) {
   ESP_LOGI(TAG_SCHED, "Turning pump OFF (duration expired)");
   
   s_device_state.pump_status = false;
-  gpio_set_level(PUMP_ON_GPIO, 0);
-  gpio_set_level(PUMP_OFF_GPIO, 1);
-  
-  vTaskDelay(pdMS_TO_TICKS(5000));
+  #ifdef CONFIG_BORWELL
+    gpio_set_level(PUMP_ON_GPIO, 1);
+    gpio_set_level(PUMP_OFF_GPIO, 0);
 
-  gpio_set_level(PUMP_ON_GPIO, 0);
-  gpio_set_level(PUMP_OFF_GPIO, 0);
+    vTaskDelay(pdMS_TO_TICKS(5000));
+
+    gpio_set_level(PUMP_ON_GPIO, 0);
+    gpio_set_level(PUMP_OFF_GPIO, 0);
+  #endif
+
+  #ifdef CONFIG_1HP
+    gpio_set_level(PUMP_ON_GPIO, 0);
+  #endif
   // Publish status update
   if (s_mqtt_connection) {
     publish_status(s_mqtt_connection);
@@ -614,26 +630,39 @@ void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_
   if (strstr(msg, "ON") != NULL) {
     ESP_LOGI(TAG, "PUMP ON triggered");
     s_device_state.pump_status = true;
-    gpio_set_level(PUMP_ON_GPIO, 1);
-    gpio_set_level(PUMP_OFF_GPIO, 0);
-
-    vTaskDelay(pdMS_TO_TICKS(4000));
+  #ifdef CONFIG_BORWELL
+    gpio_set_level(PUMP_ON_GPIO, 0);
+    gpio_set_level(PUMP_OFF_GPIO, 1);
+    // ESP_LOGI(TAG, "PUMP ON triggered Borewell");
+    vTaskDelay(pdMS_TO_TICKS(5000));
 
     gpio_set_level(PUMP_ON_GPIO, 0);
     gpio_set_level(PUMP_OFF_GPIO, 0);
+    ESP_LOGI(TAG, "PUMP OFF triggered Borewell");
+  #endif
+
+  #ifdef CONFIG_1HP
+    gpio_set_level(PUMP_ON_GPIO, 1);
+  #endif
     publish_status(c);
     return;
   }
   else if (strstr(msg, "OFF") != NULL) {
     ESP_LOGI(TAG, "PUMP OFF triggered");
     s_device_state.pump_status = false;
-    gpio_set_level(PUMP_ON_GPIO, 0);
-    gpio_set_level(PUMP_OFF_GPIO, 1);
+  #ifdef CONFIG_BORWELL
+    gpio_set_level(PUMP_ON_GPIO, 1);
+    gpio_set_level(PUMP_OFF_GPIO, 0);
 
-    vTaskDelay(pdMS_TO_TICKS(4000));
+    vTaskDelay(pdMS_TO_TICKS(5000));
 
     gpio_set_level(PUMP_ON_GPIO, 0);
     gpio_set_level(PUMP_OFF_GPIO, 0);
+  #endif
+
+  #ifdef CONFIG_1HP
+    gpio_set_level(PUMP_ON_GPIO, 0);
+  #endif
     publish_status(c);
     return;
   }
@@ -764,6 +793,8 @@ static void heartbeat_init(void) {
 
 void app_main() {
 
+    ESP_LOGI(TAG, "v%s", PROJECT_VERSION);
+
   s_boot_time = 0;
   esp_vfs_spiffs_conf_t conf = {
     .base_path = "/spiffs",
@@ -780,8 +811,8 @@ void app_main() {
                            .intr_type = GPIO_INTR_DISABLE};
   gpio_config(&io_conf);
  
-  gpio_set_level(PUMP_ON_GPIO, 0);
-  gpio_set_level(PUMP_OFF_GPIO, 0);
+  gpio_set_level(PUMP_ON_GPIO, 1);
+  gpio_set_level(PUMP_OFF_GPIO, 1);
   vTaskDelay(pdMS_TO_TICKS(1000));
 
 
