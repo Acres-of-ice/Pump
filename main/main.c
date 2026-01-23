@@ -61,7 +61,7 @@ static esp_timer_handle_t s_heartbeat_timer = NULL;
 #define TLS_CA ""
 
 
-#define PROJECT_VERSION "0.0.0"  
+// #define PROJECT_VERSION 
 
 
 static struct mg_rpc *s_rpc = NULL;
@@ -90,6 +90,10 @@ static struct device_state s_device_state = {false, PROJECT_VERSION};
 
 // Scheduler structures
 #define MAX_SCHEDULES 10
+
+
+
+
 
 typedef struct {
   uint32_t id;           // Unique schedule ID
