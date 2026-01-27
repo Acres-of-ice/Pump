@@ -29,9 +29,9 @@ static bool s_ota_active = false;
 // static esp_ota_handle_t s_ota_handle = 0;
 
 // Determine pump type from Kconfig
-#if defined(CONFIG_Borewell)
+#if defined(CONFIG_PUMP_BOREWELL)
     #define PUMP_TYPE "Borewell"
-#elif defined(CONFIG_1HP)
+#elif defined(CONFIG_PUMP_1HP)
     #define PUMP_TYPE "1 HP"
 #else
     #define PUMP_TYPE "Unknown"
@@ -149,21 +149,21 @@ static int64_t get_current_timestamp(void) {
 
 // Turn pump ON for a specific duration
 static void pump_turn_on(uint32_t duration_seconds) {
-  ESP_LOGI(TAG_SCHED, "Turning pump ON for %lu seconds", duration_seconds);
+  ESP_LOGD(TAG_SCHED, "Turning pump ON for %lu seconds", duration_seconds);
   
   s_device_state.pump_status = true;
 
-  #ifdef CONFIG_BORWELL
-    gpio_set_level(PUMP_ON_GPIO, 0);
-    gpio_set_level(PUMP_OFF_GPIO, 1);
+  #ifdef CONFIG_PUMP_BOREWELL
+    gpio_set_level(PUMP_ON_GPIO, 1);
+    gpio_set_level(PUMP_OFF_GPIO, 0);
 
-    vTaskDelay(pdMS_TO_TICKS(5000));
+    vTaskDelay(pdMS_TO_TICKS(3000));
 
     gpio_set_level(PUMP_ON_GPIO, 0);
     gpio_set_level(PUMP_OFF_GPIO, 0);
   #endif
 
-  #ifdef CONFIG_1HP
+  #ifdef CONFIG_PUMP_1HP
     gpio_set_level(PUMP_ON_GPIO, 1);
   #endif
 
@@ -187,20 +187,20 @@ static void pump_turn_on(uint32_t duration_seconds) {
 
 // Timer callback to turn pump OFF
 static void pump_turn_off_callback(void *arg) {
-  ESP_LOGI(TAG_SCHED, "Turning pump OFF (duration expired)");
+  ESP_LOGD(TAG_SCHED, "Turning pump OFF (duration expired)");
   
   s_device_state.pump_status = false;
-  #ifdef CONFIG_BORWELL
-    gpio_set_level(PUMP_ON_GPIO, 1);
-    gpio_set_level(PUMP_OFF_GPIO, 0);
+  #ifdef CONFIG_PUMP_BOREWELL
+    gpio_set_level(PUMP_ON_GPIO, 0);
+    gpio_set_level(PUMP_OFF_GPIO, 1);
 
-    vTaskDelay(pdMS_TO_TICKS(5000));
+    vTaskDelay(pdMS_TO_TICKS(3000));
 
     gpio_set_level(PUMP_ON_GPIO, 0);
     gpio_set_level(PUMP_OFF_GPIO, 0);
   #endif
 
-  #ifdef CONFIG_1HP
+  #ifdef CONFIG_PUMP_1HP
     gpio_set_level(PUMP_ON_GPIO, 0);
   #endif
   // Publish status update
@@ -238,7 +238,7 @@ static void scheduler_check_callback(void *arg) {
     }
     
     if (should_run) {
-      ESP_LOGI(TAG_SCHED, "Executing schedule ID %lu", sched->id);
+      ESP_LOGD(TAG_SCHED, "Executing schedule ID %lu", sched->id);
       sched->last_run = now;
       pump_turn_on(sched->duration);
       
@@ -262,7 +262,7 @@ static void scheduler_init(void) {
   esp_timer_create(&timer_args, &s_scheduler_timer);
   esp_timer_start_periodic(s_scheduler_timer, 10 * 1000000); // 10 seconds
 
-  ESP_LOGI(TAG_SCHED, "Scheduler initialized (10s check interval)");
+  ESP_LOGD(TAG_SCHED, "Scheduler initialized (10s check interval)");
 }
 
 // Add a new schedule
@@ -347,7 +347,7 @@ static void rpc_schedule_add(struct mg_rpc_req *r) {
 
   s_schedule_count++;
 
-  ESP_LOGI(TAG_SCHED, "Added schedule: ID=%lu, Start=%lld, Duration=%lu, Interval=%lu",
+  ESP_LOGD(TAG_SCHED, "Added schedule: ID=%lu, Start=%lld, Duration=%lu, Interval=%lu",
            sched->id, sched->start_time, sched->duration, sched->interval);
   
   // Send success response
@@ -377,7 +377,7 @@ static void rpc_schedule_delete(struct mg_rpc_req *r) {
       }
       s_schedule_count--;
 
-      ESP_LOGI(TAG_SCHED, "Deleted schedule ID %lu", id);
+      ESP_LOGD(TAG_SCHED, "Deleted schedule ID %lu", id);
       
       // Send response
       char response[128];
@@ -420,7 +420,7 @@ static void rpc_schedule_toggle(struct mg_rpc_req *r) {
   for (int i = 0; i < s_schedule_count; i++) {
     if (s_schedules[i].id == id) {
       s_schedules[i].enabled = enabled;
-      ESP_LOGI(TAG_SCHED, "Schedule ID %lu %s", id, enabled ? "enabled" : "disabled");
+      ESP_LOGD(TAG_SCHED, "Schedule ID %lu %s", id, enabled ? "enabled" : "disabled");
       
       // Send response
       char response[128];
@@ -475,7 +475,7 @@ static void rpc_schedule_list(struct mg_rpc_req *r) {
   
   offset += snprintf(json + offset, sizeof(json) - offset, "]}}");
 
-  ESP_LOGI(TAG_SCHED, "Listing %d schedules", s_schedule_count);
+  ESP_LOGD(TAG_SCHED, "Listing %d schedules", s_schedule_count);
   
   if (s_mqtt_connection) {
     char topic[100];
@@ -499,18 +499,18 @@ static void publish_response(struct mg_connection *c, char *buf, size_t len) {
   mg_mqtt_pub(c, &pub_opts);
 }
 
+
 static void rpc_ota_upload(struct mg_rpc_req *r) {
   long ofs = mg_json_get_long(r->frame, "$.params.offset", -1);
   long tot = mg_json_get_long(r->frame, "$.params.total", -1);
   int len = 0;
   char *buf = mg_json_get_b64(r->frame, "$.params.chunk", &len);
 
-  ESP_LOGI(TAG_OTA, "OTA chunk: offset=%ld total=%ld len=%d", ofs, tot, len);
+  ESP_LOGD(TAG_OTA, "OTA chunk: offset=%ld total=%ld len=%d", ofs, tot, len);
 
   if (buf == NULL) {
     ESP_LOGE(TAG_OTA, "Buffer is NULL");
     
-    // ✅ FIX: Manually publish error response
     char response[128];
     snprintf(response, sizeof(response), 
       "{\"method\":\"ota.ack\",\"params\":{\"offset\":%ld,\"status\":\"error\"}}",
@@ -544,34 +544,19 @@ static void rpc_ota_upload(struct mg_rpc_req *r) {
       success = false;
     }
 
-    // ✅ FIX: Manually publish ACK for every chunk
+    // ✅ IMPROVED: Better handling of last chunk
+    bool isLastChunk = (ofs + len >= tot);
+    
     if (success) {
-      ESP_LOGI(TAG_OTA, "Progress: %.1f%% (%ld/%ld)", (ofs + len) * 100.0 / tot, ofs + len, tot);
+      ESP_LOGD(TAG_OTA, "Progress: %.1f%% (%ld/%ld)", (ofs + len) * 100.0 / tot, ofs + len, tot);
       
-      // Send ACK response
-      char response[128];
-      snprintf(response, sizeof(response), 
-        "{\"method\":\"ota.ack\",\"params\":{\"offset\":%ld,\"status\":\"ok\"}}",
-        ofs);
-      
-      if (s_mqtt_connection) {
-        char topic[100];
-        struct mg_mqtt_opts pub_opts;
-        memset(&pub_opts, 0, sizeof(pub_opts));
-        pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
-        pub_opts.message = mg_str(response);
-        pub_opts.qos = 1;
-        mg_mqtt_pub(s_mqtt_connection, &pub_opts);
-        ESP_LOGI(TAG_OTA, "ACK sent for offset %ld", ofs);
-      }
-
-      // If last chunk, send completion message and reboot
-      if (ofs + len >= tot) {
+      if (isLastChunk) {
+        // ✅ Last chunk - send completion message
         ESP_LOGI(TAG_OTA, "OTA COMPLETE! Sending completion message...");
         
         char complete_msg[128];
         snprintf(complete_msg, sizeof(complete_msg), 
-          "{\"method\":\"ota.complete\",\"params\":{\"status\":\"rebooting\"}}");
+          "{\"method\":\"ota.complete\",\"params\":{\"status\":\"success\"}}");
         
         if (s_mqtt_connection) {
           char topic[100];
@@ -580,14 +565,43 @@ static void rpc_ota_upload(struct mg_rpc_req *r) {
           pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
           pub_opts.message = mg_str(complete_msg);
           pub_opts.qos = 1;
+          pub_opts.retain = false;
           mg_mqtt_pub(s_mqtt_connection, &pub_opts);
+          
+          // ✅ CRITICAL: Give MQTT time to actually send the message
+          ESP_LOGD(TAG_OTA, "Waiting for message to be sent...");
+          
+          // Process any pending MQTT messages
+          for (int i = 0; i < 20; i++) {
+            mg_mgr_poll(&g_mgr, 100);  // Poll for 100ms each iteration
+            vTaskDelay(pdMS_TO_TICKS(100));
+          }
+          
+          ESP_LOGI(TAG_OTA, "Rebooting now...");
         }
         
-        vTaskDelay(pdMS_TO_TICKS(1000)); // Give time for message to send
+        vTaskDelay(pdMS_TO_TICKS(500)); // Final safety delay
         esp_restart();
+      } else {
+        // ✅ Regular chunk - send ACK
+        char response[128];
+        snprintf(response, sizeof(response), 
+          "{\"method\":\"ota.ack\",\"params\":{\"offset\":%ld,\"status\":\"ok\"}}",
+          ofs);
+        
+        if (s_mqtt_connection) {
+          char topic[100];
+          struct mg_mqtt_opts pub_opts;
+          memset(&pub_opts, 0, sizeof(pub_opts));
+          pub_opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "tx"));
+          pub_opts.message = mg_str(response);
+          pub_opts.qos = 1;
+          mg_mqtt_pub(s_mqtt_connection, &pub_opts);
+          ESP_LOGD(TAG_OTA, "ACK sent for offset %ld", ofs);
+        }
       }
     } else {
-      // Send error ACK
+      // Send error response
       char response[128];
       snprintf(response, sizeof(response), 
         "{\"method\":\"ota.ack\",\"params\":{\"offset\":%ld,\"status\":\"error\"}}",
@@ -607,6 +621,7 @@ static void rpc_ota_upload(struct mg_rpc_req *r) {
     mg_free(buf);
   }
 }
+
 void my_mqtt_tls_init(struct mg_connection *c) {
   bool is_tls = mg_url_is_ssl(WIZARD_MQTT_URL);
   ESP_LOGD(TAG_MQTT, "Connection %lu TLS enabled: %s", c->id, is_tls ? "yes" : "no");
@@ -624,7 +639,7 @@ void my_mqtt_on_connect(struct mg_connection *c, int code) {
   
   // ✅ CRITICAL FIX: Store the connection globally so rpc_ota_upload can use it
   s_mqtt_connection = c;
-  ESP_LOGI(TAG_MQTT, "MQTT connection stored: %p", c);
+  ESP_LOGD(TAG_MQTT, "MQTT connection stored: %p", c);
   
   opts.qos = 1;
   opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "rx"));
@@ -634,137 +649,165 @@ void my_mqtt_on_connect(struct mg_connection *c, int code) {
 }
 
 
-
 void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_str data) {
-  char msg[512];  // Increased size for OTA messages
-  int copy_len = (data.len < sizeof(msg) - 1) ? data.len : sizeof(msg) - 1;
-  memcpy(msg, data.buf, copy_len);
-  msg[copy_len] = '\0';
+  // ✅ FIX: Check message type WITHOUT copying entire buffer
+  bool is_json = (data.len > 0 && data.buf[0] == '{');
+  bool is_rpc_method = false;
+  
+  if (is_json && data.len > 10) {
+    // Check if it contains "method" field
+    is_rpc_method = (mg_json_get(data, "$.method", NULL) > 0);
+  }
 
-  ESP_LOGI(TAG_MQTT, "RX: %s", msg);
+  // ✅ For logging, only copy first 200 chars
+  char preview[256];
+  int preview_len = (data.len < 200) ? data.len : 200;
+  memcpy(preview, data.buf, preview_len);
+  preview[preview_len] = '\0';
+  ESP_LOGD(TAG_MQTT, "RX (%d bytes): %s%s", (int)data.len, preview, data.len > 200 ? "..." : "");
 
-  // STATUS REQUEST - Reply with firmware version and site name
-  if (strstr(msg, "status") != NULL || strstr(msg, "STATUS") != NULL) {
-    ESP_LOGI(TAG_MQTT, "Status request received");
+  // ✅ Handle STATUS REQUEST
+  if (!is_rpc_method && data.len < 100) {
+    // For short messages, check if it's a status request
+    char small_buf[128];
+    int copy_len = (data.len < 100) ? data.len : 100;
+    memcpy(small_buf, data.buf, copy_len);
+    small_buf[copy_len] = '\0';
     
-    // Calculate uptime
-    int64_t current_time = get_current_timestamp();
-    int64_t uptime_seconds = current_time - s_boot_time;
-    int uptime_days = uptime_seconds / 86400;
-    int uptime_hours = (uptime_seconds % 86400) / 3600;
-    int uptime_minutes = (uptime_seconds % 3600) / 60;
-    
-    char uptime_str[64];
-    if (uptime_days > 0) {
-      snprintf(uptime_str, sizeof(uptime_str), "%d days, %d hours", uptime_days, uptime_hours);
-    } else if (uptime_hours > 0) {
-      snprintf(uptime_str, sizeof(uptime_str), "%d hours, %d minutes", uptime_hours, uptime_minutes);
-    } else {
-      snprintf(uptime_str, sizeof(uptime_str), "%d minutes", uptime_minutes);
+    // Convert to lowercase for case-insensitive comparison
+    for (int i = 0; i < copy_len; i++) {
+      small_buf[i] = tolower((unsigned char)small_buf[i]);
     }
     
-    char response[512];
-    snprintf(response, sizeof(response),
-      "{\"method\":\"status.response\",\"params\":{"
-      "\"site_name\":\"%s\","
-      "\"firmware_version\":\"%s\","
-      "\"pump_type\":\"%s\"," 
-      "\"pump_status\":\"%s\","
-      "\"imsi\":\"%s\","
-      "\"uptime\":\"%s\"}}",
-      CONFIG_DEVICE_ID,
-      s_device_state.firmware_version,
-      PUMP_TYPE,
-      s_device_state.pump_status ? "ON" : "OFF",
-      imsi_number,
-      uptime_str);
+    if (strstr(small_buf, "status") != NULL) {
+      ESP_LOGD(TAG_MQTT, "Status request received");
+      
+      // Calculate uptime
+      int64_t current_time = get_current_timestamp();
+      int64_t uptime_seconds = current_time - s_boot_time;
+      int uptime_days = uptime_seconds / 86400;
+      int uptime_hours = (uptime_seconds % 86400) / 3600;
+      int uptime_minutes = (uptime_seconds % 3600) / 60;
+      
+      char uptime_str[64];
+      if (uptime_days > 0) {
+        snprintf(uptime_str, sizeof(uptime_str), "%d days, %d hours", uptime_days, uptime_hours);
+      } else if (uptime_hours > 0) {
+        snprintf(uptime_str, sizeof(uptime_str), "%d hours, %d minutes", uptime_hours, uptime_minutes);
+      } else {
+        snprintf(uptime_str, sizeof(uptime_str), "%d minutes", uptime_minutes);
+      }
+      
+      char response[512];
+      snprintf(response, sizeof(response),
+        "{\"method\":\"status.response\",\"params\":{"
+        "\"site_name\":\"%s\","
+        "\"firmware_version\":\"%s\","
+        "\"pump_type\":\"%s\"," 
+        "\"pump_status\":\"%s\","
+        "\"imsi\":\"%s\","
+        "\"uptime\":\"%s\"}}",
+        CONFIG_DEVICE_ID,
+        s_device_state.firmware_version,
+        PUMP_TYPE,
+        s_device_state.pump_status ? "ON" : "OFF",
+        imsi_number,
+        uptime_str);
+      
+      char topic_tx[100];
+      struct mg_mqtt_opts pub_opts;
+      memset(&pub_opts, 0, sizeof(pub_opts));
+      pub_opts.topic = mg_str(make_topic_name(topic_tx, sizeof(topic_tx), "tx"));
+      pub_opts.message = mg_str(response);
+      pub_opts.qos = 1;
+      mg_mqtt_pub(c, &pub_opts);
+
+      ESP_LOGD(TAG_MQTT, "Status response sent");
+      return;
+    }
+  }
+
+  // ✅ Handle JSON-RPC messages (OTA, Scheduler, etc.)
+  if (is_rpc_method) {
+    ESP_LOGD(TAG_RPC, "Processing RPC command...");
+    struct mg_iobuf io = {0, 0, 0, 512};
+
+    struct mg_rpc_req rpc_req = {&s_rpc, NULL, mg_pfn_iobuf, &io, NULL, data};
+
+    mg_rpc_process(&rpc_req);
+
+    if (io.buf && io.len > 0) {
+      ESP_LOGD(TAG_RPC, "Response: %.*s", (int)io.len, (char*)io.buf);
+      publish_response(c, (char *) io.buf, io.len);
+      ESP_LOGD(TAG_RPC, "RPC response published");
+      publish_status(c);
+    } else {
+      ESP_LOGD(TAG_RPC, "No response in buffer (manual publish was used)");
+    }
+
+    mg_iobuf_free(&io);
+    return;
+  }
+
+  // ✅ Handle DIRECT PUMP CONTROL (only for simple text commands)
+  if (!is_json && data.len < 100) {
+    // Only copy small messages for pump control
+    char cmd[128];
+    int cmd_len = (data.len < 100) ? data.len : 100;
+    memcpy(cmd, data.buf, cmd_len);
+    cmd[cmd_len] = '\0';
     
-    // Publish response to tx topic
-    char topic_tx[100];
-    struct mg_mqtt_opts pub_opts;
-    memset(&pub_opts, 0, sizeof(pub_opts));
-    pub_opts.topic = mg_str(make_topic_name(topic_tx, sizeof(topic_tx), "tx"));
-    pub_opts.message = mg_str(response);
-    pub_opts.qos = 1;
-    mg_mqtt_pub(c, &pub_opts);
+    // Convert to uppercase for comparison
+    for (int i = 0; i < cmd_len; i++) {
+      cmd[i] = toupper((unsigned char)cmd[i]);
+    }
+    
+    if (strstr(cmd, "ON") != NULL && strstr(cmd, "PUMP") != NULL) {
+      ESP_LOGD(TAG, "PUMP ON triggered (direct command)");
+      s_device_state.pump_status = true;
+      
+#ifdef CONFIG_PUMP_BOREWELL
+      gpio_set_level(PUMP_ON_GPIO, 1);
+      gpio_set_level(PUMP_OFF_GPIO, 0);
+      vTaskDelay(pdMS_TO_TICKS(3000));
+      gpio_set_level(PUMP_ON_GPIO, 0);
+      gpio_set_level(PUMP_OFF_GPIO, 0);
+#endif
 
-    ESP_LOGI(TAG_MQTT, "Status response sent: Site=%s, FW=%s, Pump=%s, Uptime=%s",
-             CONFIG_DEVICE_ID, s_device_state.firmware_version,
-             s_device_state.pump_status ? "ON" : "OFF", uptime_str);
-    return;
+#ifdef CONFIG_PUMP_1HP
+      gpio_set_level(PUMP_ON_GPIO, 1);
+#endif
+      
+      publish_status(c);
+      return;
+    }
+    else if (strstr(cmd, "OFF") != NULL && strstr(cmd, "PUMP") != NULL) {
+      ESP_LOGD(TAG, "PUMP OFF triggered (direct command)");
+      s_device_state.pump_status = false;
+      
+#ifdef CONFIG_PUMP_BOREWELL
+      gpio_set_level(PUMP_ON_GPIO, 0);
+      gpio_set_level(PUMP_OFF_GPIO, 1);
+      vTaskDelay(pdMS_TO_TICKS(3000));
+      gpio_set_level(PUMP_ON_GPIO, 0);
+      gpio_set_level(PUMP_OFF_GPIO, 0);
+#endif
+
+#ifdef CONFIG_PUMP_1HP
+      gpio_set_level(PUMP_ON_GPIO, 0);
+#endif
+      
+      publish_status(c);
+      return;
+    }
   }
 
-  // DIRECT PUMP CONTROL - NO RPC LAYER!
-  if (strstr(msg, "ON") != NULL) {
-    ESP_LOGI(TAG, "PUMP ON triggered");
-    s_device_state.pump_status = true;
-  #ifdef CONFIG_BORWELL
-    gpio_set_level(PUMP_ON_GPIO, 0);
-    gpio_set_level(PUMP_OFF_GPIO, 1);
-    // ESP_LOGI(TAG, "PUMP ON triggered Borewell");
-    vTaskDelay(pdMS_TO_TICKS(5000));
-
-    gpio_set_level(PUMP_ON_GPIO, 0);
-    gpio_set_level(PUMP_OFF_GPIO, 0);
-    ESP_LOGI(TAG, "PUMP OFF triggered Borewell");
-  #endif
-
-  #ifdef CONFIG_1HP
-    gpio_set_level(PUMP_ON_GPIO, 1);
-  #endif
-    publish_status(c);
-    return;
-  }
-  else if (strstr(msg, "OFF") != NULL) {
-    ESP_LOGI(TAG, "PUMP OFF triggered");
-    s_device_state.pump_status = false;
-  #ifdef CONFIG_BORWELL
-    gpio_set_level(PUMP_ON_GPIO, 1);
-    gpio_set_level(PUMP_OFF_GPIO, 0);
-
-    vTaskDelay(pdMS_TO_TICKS(5000));
-
-    gpio_set_level(PUMP_ON_GPIO, 0);
-    gpio_set_level(PUMP_OFF_GPIO, 0);
-  #endif
-
-  #ifdef CONFIG_1HP
-    gpio_set_level(PUMP_ON_GPIO, 0);
-  #endif
-    publish_status(c);
-    return;
-  }
-  
-  // Let RPC handle other messages (OTA)
-  ESP_LOGD(TAG_RPC, "Processing as RPC command...");
-  struct mg_iobuf io = {0, 0, 0, 512};
-
-  // Initialize frame separately to avoid struct initializer issues
-  struct mg_str frame;
-  frame.buf = data.buf;
-  frame.len = data.len;
-
-  struct mg_rpc_req rpc_req = {&s_rpc, NULL, mg_pfn_iobuf, &io, NULL, frame};
-
-  ESP_LOGD(TAG_RPC, "Before mg_rpc_process: io.buf=%p io.len=%zu", io.buf, io.len);
-  mg_rpc_process(&rpc_req);
-  ESP_LOGD(TAG_RPC, "After mg_rpc_process: io.buf=%p io.len=%zu", io.buf, io.len);
-
-  if (io.buf && io.len > 0) {
-    ESP_LOGD(TAG_RPC, "Response: %.*s", (int)io.len, (char*)io.buf);
-    publish_response(c, (char *) io.buf, io.len);
-    ESP_LOGI(TAG_RPC, "RPC response published");
-    publish_status(c);
-  } else {
-    ESP_LOGD(TAG_RPC, "No response in buffer (manual publish was used)");
-  }
-
-  mg_iobuf_free(&io);
+  ESP_LOGW(TAG_MQTT, "Unhandled message (%d bytes)", (int)data.len);
 }
 
 void my_mqtt_set_connection(struct mg_connection *c) {
   s_mqtt_connection = c;
-  ESP_LOGI(TAG_MQTT, "MQTT connection stored: %p", c);
+  ESP_LOGD(TAG_MQTT, "MQTT connection stored: %p", c);
 }
 struct mg_connection *my_mqtt_connect(mg_event_handler_t fn) {
   const char *url = WIZARD_MQTT_URL;
@@ -833,7 +876,7 @@ void mqtt_send_offline_status(void) {
     pub_opts.retain = true;
     mg_mqtt_pub(s_mqtt_connection, &pub_opts);
 
-    ESP_LOGI(TAG_MQTT, "Sent offline status");
+    ESP_LOGD(TAG_MQTT, "Sent offline status");
     vTaskDelay(pdMS_TO_TICKS(500)); // Give time to send
   }
 }
@@ -860,11 +903,19 @@ static void heartbeat_init(void) {
   // Combined with MQTT keepalive (60s), dashboard will detect offline within 90s
   esp_timer_start_periodic(s_heartbeat_timer, 30 * 1000000ULL); // 30 seconds
 
-  ESP_LOGI(TAG_HB, "Heartbeat initialized (30s interval)");
+  ESP_LOGD(TAG_HB, "Heartbeat initialized (30s interval)");
 }
 
 
 void app_main() {
+
+  // esp_log_level_set("TAG_SCHED", ESP_LOG_DEBUG);
+  // esp_log_level_set("TAG_OTA", ESP_LOG_DEBUG);
+  // esp_log_level_set("TAG_MQTT", ESP_LOG_DEBUG);
+  // esp_log_level_set("TAG_RPC", ESP_LOG_DEBUG);
+  // esp_log_level_set("TAG", ESP_LOG_DEBUG);
+  // esp_log_level_set("TAG_HB", ESP_LOG_DEBUG);
+  //esp_log_level_set("SIM", ESP_LOG_DEBUG);
 
     ESP_LOGI(TAG, "v%s", PROJECT_VERSION);
 
@@ -884,8 +935,8 @@ void app_main() {
                            .intr_type = GPIO_INTR_DISABLE};
   gpio_config(&io_conf);
  
-  gpio_set_level(PUMP_ON_GPIO, 1);
-  gpio_set_level(PUMP_OFF_GPIO, 1);
+  gpio_set_level(PUMP_ON_GPIO, 0);
+  gpio_set_level(PUMP_OFF_GPIO, 0);
   vTaskDelay(pdMS_TO_TICKS(1000));
 
 
@@ -898,9 +949,6 @@ void app_main() {
     }
   }else{
     ESP_LOGI(TAG, "SIM initialization succesful");
-        // Get IMSI after SIM is initialized
-    // vTaskDelay(pdMS_TO_TICKS(2000));  // Wait for SIM to be ready
-    // get_imsi_from_sim();
   }
 
 
@@ -926,7 +974,7 @@ void app_main() {
     ESP_LOGE(TAG,"❌ Failed to sync time\n");
     s_boot_time = 0;  // Fallback to 0 if time sync fails
   } else {
-    ESP_LOGI(TAG,"✅ Time synced: %s", asctime(&timeinfo));
+    ESP_LOGD(TAG,"✅ Time synced: %s", asctime(&timeinfo));
     s_boot_time = (int64_t)now;  // Record actual boot time
     ESP_LOGI(TAG,"📅 Boot time recorded: %lld", s_boot_time);
   }
@@ -952,7 +1000,7 @@ void app_main() {
   };
   mongoose_set_mqtt_handlers(&mqtt_handlers);
 
-  ESP_LOGI(TAG,"MQTT handlers set. Starting main loop...\n");
+  ESP_LOGD(TAG,"MQTT handlers set. Starting main loop...\n");
   for (;;) {
     mongoose_poll();
     esp_task_wdt_reset();      // 🔧 FIX: Reset watchdog every loop

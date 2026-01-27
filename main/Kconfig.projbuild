@@ -41,17 +41,18 @@ menu "Pump Controller Configuration"
             Unique identifier for this device.
             Used in MQTT topics: mg_mqtt_dashboard/{DEVICE_ID}/rx
 
-   	choice PUMP_TYPE
-		bool "Pump Type"
-		default Borewell
-		help
-			Select the type of pump depending on the site.
+choice PUMP_TYPE
+    prompt "Pump Type"
+    default PUMP_BOREWELL
+    help
+        Select the type of pump depending on the site.
 
-		config Borewell
-			bool "Borewell"
-		config 1HP
-			bool "1 HP"
-    endchoice
+    config PUMP_BOREWELL
+        bool "Borewell"
+        
+    config PUMP_1HP
+        bool "1 HP"
+endchoice
 
     config MQTT_BROKER_URL
         string "MQTT Broker URL"

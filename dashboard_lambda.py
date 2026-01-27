@@ -811,7 +811,7 @@ def render_dashboard(user_email, device_name, is_admin):
         const INITIAL_WAIT_TIMEOUT = 30000;
         const chunkSize = 4096;
 
-        const KNOWN_DEVICES = ['contact', 'shey'];
+        const KNOWN_DEVICES = ['contact', 'shey','yatoohussain786','parveezshah1983','khandilawar1441'];
 
         const options = {{
             clean: true,
@@ -1225,6 +1225,10 @@ document.getElementById('uploadBtn').addEventListener('click', async () => {{
     otaStatus.textContent = 'Starting upload...';
     progressFill.style.width = '0%';
 
+    // ✅ FIXED: Track completion state
+    let uploadComplete = false;
+    let completionMessageReceived = false;
+
     try {{
         const uint8Array = new Uint8Array(await file.arrayBuffer());
         const total = uint8Array.length;
@@ -1236,44 +1240,118 @@ document.getElementById('uploadBtn').addEventListener('click', async () => {{
             const chunk = uint8Array.slice(offset, offset + chunkSize);
             const base64Chunk = btoa(String.fromCharCode.apply(null, chunk));
 
-            otaAckReceived = false;
+            const isLastChunk = (offset + chunk.length >= total);
 
             const payload = JSON.stringify({{
                 method: "ota.upload",
                 params: {{ offset, total, chunk: base64Chunk }}
             }});
 
-            console.log(`📤 Sending chunk at offset ${{offset}}, size: ${{chunk.length}}`);
+            console.log(`📤 Sending chunk at offset ${{offset}}/${{total}} (${{((offset/total)*100).toFixed(1)}}%)`);
             
             client.publish(`${{prefix}}/${{selectedDevice}}/rx`, payload, {{ qos: 1 }});
 
-            let ackWaitTime = 0;
-            const maxWait = 15000; // Increased to 15 seconds
-            while (!otaAckReceived && ackWaitTime < maxWait) {{
-                await new Promise(r => setTimeout(r, 100));
-                ackWaitTime += 100;
-            }}
-            
-            if (!otaAckReceived) {{
-                console.error('❌ No ACK received for offset', offset);
-                throw new Error('Timeout waiting for ACK at offset ' + offset);
+            if (isLastChunk) {{
+                // ✅ Last chunk sent
+                console.log('📦 Last chunk sent! Waiting for device to process and reboot...');
+                progressFill.style.width = '99.5%';
+                otaStatus.className = 'ota-status waiting';
+                otaStatus.textContent = 'Finalizing upload... (99.5%)';
+                
+                // ✅ Wait a bit for device to process
+                await new Promise(r => setTimeout(r, 2000));
+                
+                // ✅ Mark as complete (device will reboot)
+                uploadComplete = true;
+                progressFill.style.width = '100%';
+                otaStatus.className = 'ota-status success';
+                otaStatus.textContent = '✅ Upload Complete! Device is rebooting...';
+                
+                break; // Exit upload loop
+                
+            }} else {{
+                // ✅ Wait for ACK on non-final chunks
+                otaAckReceived = false;
+                let ackWaitTime = 0;
+                const maxWait = 10000;
+                
+                while (!otaAckReceived && ackWaitTime < maxWait) {{
+                    await new Promise(r => setTimeout(r, 100));
+                    ackWaitTime += 100;
+                }}
+                
+                if (!otaAckReceived) {{
+                    throw new Error(`Timeout waiting for ACK at offset ${{offset}}`);
+                }}
+                
+                console.log(`✅ ACK received for offset ${{offset}}`);
             }}
 
-            console.log('✅ ACK received for offset', offset);
             offset += chunk.length;
-            const progress = (offset / total) * 100;
+            
+            // Update progress (cap at 99% before last chunk)
+            const progress = Math.min((offset / total) * 99, 99);
             progressFill.style.width = progress + '%';
-            otaStatus.textContent = 'Uploading: ' + progress.toFixed(1) + '% (' + offset + '/' + total + ' bytes)';
+            otaStatus.textContent = `Uploading: ${{progress.toFixed(1)}}% (${{offset}}/${{total}} bytes)`;
         }}
 
-        console.log('🎉 Upload complete!');
-        otaStatus.className = 'ota-status success';
-        otaStatus.textContent = 'Upload complete! Waiting for device to reboot...';
-        setTimeout(() => {{ uploadBtn.disabled = false; }}, 5000);
+        // ✅ Upload complete, now wait for device reconnection
+        if (uploadComplete) {{
+            console.log('⏳ Waiting for device to reboot and reconnect...');
+            otaStatus.textContent = '🔄 Device rebooting... waiting for reconnection...';
+            
+            // Mark device as offline immediately
+            if (devices[selectedDevice]) {{
+                devices[selectedDevice].online = false;
+                devices[selectedDevice].lastHeartbeat = 0;
+                updateDeviceList();
+                updatePumpStatus();
+            }}
+            
+            // ✅ Wait for device to come back online
+            let reconnectWaitTime = 0;
+            const maxReconnectWait = 45000; // 45 seconds
+            let deviceReconnected = false;
+            
+            while (reconnectWaitTime < maxReconnectWait) {{
+                await new Promise(r => setTimeout(r, 1000));
+                reconnectWaitTime += 1000;
+                
+                const device = devices[selectedDevice];
+                const secondsWaited = Math.floor(reconnectWaitTime / 1000);
+                
+                // ✅ Check if device came back online
+                if (device && device.online && device.lastHeartbeat > 0) {{
+                    console.log('✅ Device reconnected!');
+                    deviceReconnected = true;
+                    otaStatus.className = 'ota-status success';
+                    otaStatus.textContent = '✅ Firmware Update Successful! Device reconnected.';
+                    
+                    // ✅ Request fresh status from device
+                    setTimeout(() => {{
+                        console.log('📊 Requesting fresh status...');
+                        requestDeviceStatus();
+                    }}, 2000);
+                    
+                    break;
+                }}
+                
+                // Update status message
+                otaStatus.textContent = `🔄 Waiting for device reconnection... (${{secondsWaited}}s / ${{Math.floor(maxReconnectWait/1000)}}s)`;
+            }}
+            
+            if (!deviceReconnected) {{
+                otaStatus.className = 'ota-status warning';
+                otaStatus.textContent = '⚠️ Device did not reconnect within 45s. Please check device manually and refresh page.';
+            }}
+            
+            uploadBtn.disabled = false;
+        }}
+
     }} catch (error) {{
         console.error('💥 OTA upload error:', error);
         otaStatus.className = 'ota-status error';
-        otaStatus.textContent = 'Upload failed: ' + error.message;
+        otaStatus.textContent = '❌ Upload failed: ' + error.message;
         uploadBtn.disabled = false;
     }}
 }});
