@@ -42,8 +42,10 @@ ADMIN_EMAILS = [
 ]
 
 # MQTT Configuration
-# WebSocket URL for browser connections (HiveMQ public broker)
-MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt"
+# WebSocket URL for browser connections (via Cloudflare Tunnel)
+MQTT_BROKER_URL = "wss://mqtt.iceacres.com/mqtt"
+MQTT_USERNAME = "aoi"
+MQTT_PASSWORD = "4201"
 MQTT_TOPIC_PREFIX = "pump"
 
 
@@ -817,6 +819,8 @@ def render_dashboard(user_email, device_name, is_admin):
             clean: true,
             connectTimeout: 5000,
             clientId: 'pump-' + USER_CONFIG.device + '-' + Math.random().toString(16).substr(2, 8),
+            username: '{MQTT_USERNAME}',
+            password: '{MQTT_PASSWORD}',
         }};
 
         let client = null;
