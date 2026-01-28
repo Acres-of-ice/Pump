@@ -813,7 +813,7 @@ def render_dashboard(user_email, device_name, is_admin):
         const INITIAL_WAIT_TIMEOUT = 30000;
         const chunkSize = 4096;
 
-        const KNOWN_DEVICES = ['contact', 'shey'];
+        const KNOWN_DEVICES = ['contact', 'shey','yatoohussain786','parveezshah1983','khandilawar1441'];
 
         const options = {{
             clean: true,
