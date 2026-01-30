@@ -1272,50 +1272,51 @@ void app_main() {
 
 #if CONFIG_ENABLE_CAMERA
   
-  #if CONFIG_FRAMESIZE_240X240
-  int framesize = FRAMESIZE_240X240;
-#define FRAMESIZE_STRING "240x240"
-#elif CONFIG_FRAMESIZE_QVGA
-  int framesize = FRAMESIZE_QVGA;
-#define FRAMESIZE_STRING "320x240"
-#elif CONFIG_FRAMESIZE_HVGA
-  int framesize = FRAMESIZE_HVGA;
-#define FRAMESIZE_STRING "480x320"
-#elif CONFIG_FRAMESIZE_VGA
-  int framesize = FRAMESIZE_VGA;
-#define FRAMESIZE_STRING "640x480"
-#elif CONFIG_FRAMESIZE_SVGA
-  int framesize = FRAMESIZE_SVGA;
-#define FRAMESIZE_STRING "800x600"
-#elif CONFIG_FRAMESIZE_XGA
-  int framesize = FRAMESIZE_XGA;
-#define FRAMESIZE_STRING "1024x768"
-#elif CONFIG_FRAMESIZE_HD
-  int framesize = FRAMESIZE_HD;
-#define FRAMESIZE_STRING "1280x720"
-#elif CONFIG_FRAMESIZE_SXGA
-  int framesize = FRAMESIZE_SXGA;
-#define FRAMESIZE_STRING "1280x1024"
-#elif CONFIG_FRAMESIZE_UXGA
-  int framesize = FRAMESIZE_UXGA;
-#define FRAMESIZE_STRING "1600x1200"
-#elif CONFIG_FRAMESIZE_QXGA
-  int framesize = FRAMESIZE_QXGA;
-#define FRAMESIZE_STRING "2048x1536"
-#elif CONFIG_FRAMESIZE_QSXGA
-  int framesize = FRAMESIZE_QSXGA;
-#define FRAMESIZE_STRING "2560x1920"
-#elif CONFIG_FRAMESIZE_5MP
-  int framesize = FRAMESIZE_5MP;
-#define FRAMESIZE_STRING "2592x1944"
-#endif
-    ESP_LOGI(TAG, "Initializing camera...");
-    ret = init_camera(framesize);
-    if (ret != ESP_OK) {
-    while (1) {
-      vTaskDelay(1);
-    }
-  }
+      #if CONFIG_FRAMESIZE_240X240
+        int framesize = FRAMESIZE_240X240;
+      #define FRAMESIZE_STRING "240x240"
+      #elif CONFIG_FRAMESIZE_QVGA
+        int framesize = FRAMESIZE_QVGA;
+      #define FRAMESIZE_STRING "320x240"
+      #elif CONFIG_FRAMESIZE_HVGA
+        int framesize = FRAMESIZE_HVGA;
+      #define FRAMESIZE_STRING "480x320"
+      #elif CONFIG_FRAMESIZE_VGA
+        int framesize = FRAMESIZE_VGA;
+      #define FRAMESIZE_STRING "640x480"
+      #elif CONFIG_FRAMESIZE_SVGA
+        int framesize = FRAMESIZE_SVGA;
+      #define FRAMESIZE_STRING "800x600"
+      #elif CONFIG_FRAMESIZE_XGA
+        int framesize = FRAMESIZE_XGA;
+      #define FRAMESIZE_STRING "1024x768"
+      #elif CONFIG_FRAMESIZE_HD
+        int framesize = FRAMESIZE_HD;
+      #define FRAMESIZE_STRING "1280x720"
+      #elif CONFIG_FRAMESIZE_SXGA
+        int framesize = FRAMESIZE_SXGA;
+      #define FRAMESIZE_STRING "1280x1024"
+      #elif CONFIG_FRAMESIZE_UXGA
+        int framesize = FRAMESIZE_UXGA;
+      #define FRAMESIZE_STRING "1600x1200"
+      #elif CONFIG_FRAMESIZE_QXGA
+        int framesize = FRAMESIZE_QXGA;
+      #define FRAMESIZE_STRING "2048x1536"
+      #elif CONFIG_FRAMESIZE_QSXGA
+        int framesize = FRAMESIZE_QSXGA;
+      #define FRAMESIZE_STRING "2560x1920"
+      #elif CONFIG_FRAMESIZE_5MP
+        int framesize = FRAMESIZE_5MP;
+      #define FRAMESIZE_STRING "2592x1944"
+      #endif
+
+          ESP_LOGI(TAG, "Initializing camera...");
+          ret = init_camera(framesize);
+          if (ret != ESP_OK) {
+          while (1) {
+            vTaskDelay(1);
+            }
+           }
 #endif
 
   const esp_partition_t *ota_part = esp_ota_get_next_update_partition(NULL);
