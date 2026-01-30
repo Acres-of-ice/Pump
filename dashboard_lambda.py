@@ -35,11 +35,17 @@ CALLBACK_URL = f"{API_BASE_URL}/callback"
 # JWKS URL for token verification
 JWKS_URL = f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/{COGNITO_USER_POOL_ID}/.well-known/jwks.json"
 
+# URL for camera
+S3_BUCKET_URL = "https://espsimcam.s3.us-east-1.amazonaws.com"
+
 # Admin emails - these users can see all devices
 ADMIN_EMAILS = [
     "bsurya@acresofice.com",
     "jnidhin@acresofice.com",
 ]
+
+# Camera Configuration - devices with camera capability
+CAMERA_ENABLED_DEVICES = ['contact','parveezshah1983']
 
 # MQTT Configuration
 # WebSocket URL for browser connections (via Cloudflare Tunnel)
@@ -248,6 +254,28 @@ def render_dashboard(user_email, device_name, is_admin):
     })
 
     admin_badge = '<span style="background:#f59e0b;color:white;padding:4px 12px;border-radius:12px;font-size:0.75rem;margin-left:12px;">ADMIN</span>' if is_admin else ''
+
+    # Determine if camera should be shown for this user
+    show_camera = is_admin or device_name in CAMERA_ENABLED_DEVICES
+    
+    # Build camera section HTML conditionally
+    camera_section = ""
+    if show_camera:
+        camera_section = """
+        <!-- Camera Section -->
+        <div class="camera-section">
+            <div class="camera-header">
+                <div class="section-title">Camera</div>
+                <button id="refreshCameraBtn" class="refresh-camera-btn">Refresh Camera</button>
+            </div>
+            <div id="cameraDisplay" class="camera-display">
+                <div class="camera-placeholder">
+                    📷 Loading latest camera image...
+                </div>
+            </div>
+            <div id="imageTimestamp" class="image-timestamp"></div>
+        </div>
+        """
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -629,34 +657,6 @@ def render_dashboard(user_email, device_name, is_admin):
         .ota-status.waiting {{ color: var(--warning); }}
         .ota-status.success {{ color: var(--success); }}
         .ota-status.error {{ color: var(--danger); }}
-        @media (max-width: 960px) {{
-        .dashboard {{ 
-          grid-template-columns: 1fr;
-          gap: 16px;
-          }}
-         .sidebar {{ 
-            max-width: 100%;
-          }}
-         .buttons {{ 
-            flex-direction: column; 
-            align-items: center; 
-          }}
-          .form-grid {{ 
-            grid-template-columns: 1fr; 
-          }}
-           .control-btn {{
-             width: 100px;
-             height: 100px;
-          }}
-           .tabs {{
-             overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-           }}
-          .tab {{
-            white-space: nowrap;
-            padding: 12px 16px;
-           }}
-        }}
         .status-row {{
             padding: 12px;
             border-bottom: 1px solid var(--border);
@@ -666,11 +666,6 @@ def render_dashboard(user_email, device_name, is_admin):
         }}
         .status-row:last-child {{
             border-bottom: none;
-        }}
-        .status-label {{
-            font-weight: 600;
-            color: var(--text);
-            font-size: 0.95rem;
         }}
         .status-value {{
             color: var(--text-mute);
@@ -694,6 +689,121 @@ def render_dashboard(user_email, device_name, is_admin):
             40% {{ content: '..'; }}
             60%, 100% {{ content: '...'; }}
         }}
+        .camera-section {{
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            box-shadow: var(--shadow-sm);
+            grid-column: 1 / -1;
+        }}
+
+        .camera-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }}
+
+        .camera-display {{
+            background: #f8fafc;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            min-height: 400px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+        }}
+
+        .camera-display img {{
+            max-width: 100%;
+            max-height: 600px;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+        }}
+
+        .camera-placeholder {{
+            color: var(--text-mute);
+            text-align: center;
+            padding: 40px;
+        }}
+
+        .camera-loading {{
+            text-align: center;
+            padding: 40px;
+            color: var(--text-mute);
+        }}
+
+        .camera-loading::after {{
+            content: '...';
+            animation: dots 1.5s steps(4, end) infinite;
+        }}
+
+        .camera-error {{
+            color: var(--danger);
+            text-align: center;
+            padding: 40px;
+        }}
+
+        .refresh-camera-btn {{
+            padding: 10px 20px;
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }}
+
+        .refresh-camera-btn:hover {{
+            background: #2563eb;
+        }}
+
+        .refresh-camera-btn:disabled {{
+            opacity: 0.5;
+            cursor: not-allowed;
+        }}
+
+        .image-timestamp {{
+            text-align: center;
+            font-size: 0.875rem;
+            color: var(--text-mute);
+            margin-top: 12px;
+        }}
+
+        @media (max-width: 960px) {{
+            .dashboard {{ 
+                grid-template-columns: 1fr;
+                gap: 16px;
+            }}
+            .sidebar {{ 
+                max-width: 100%;
+            }}
+            .buttons {{ 
+                flex-direction: column; 
+                align-items: center; 
+            }}
+            .form-grid {{ 
+                grid-template-columns: 1fr; 
+            }}
+            .control-btn {{
+                width: 100px;
+                height: 100px;
+            }}
+            .tabs {{
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }}
+            .tab {{
+                white-space: nowrap;
+                padding: 12px 16px;
+            }}
+        }}
     </style>
 </head>
 <body>
@@ -706,19 +816,18 @@ def render_dashboard(user_email, device_name, is_admin):
     </header>
 
     <div class="dashboard">
-    <aside class="sidebar">
-        <!-- Devices Section -->
-        <div class="sidebar-section">
-            <div class="sidebar-header">
-                Devices
-                <span class="connection-indicator connecting" id="mqttConnectionIndicator"></span>
+        <aside class="sidebar">
+            <!-- Devices Section -->
+            <div class="sidebar-section">
+                <div class="sidebar-header">
+                    Devices
+                    <span class="connection-indicator connecting" id="mqttConnectionIndicator"></span>
+                </div>
+                <ul class="device-list" id="deviceList"></ul>
             </div>
-            <ul class="device-list" id="deviceList"></ul>
-        </div>
-    </aside>
+        </aside>
 
         <main class="main-panel">
-
             <div class="tabs">
                 <button class="tab active" onclick="switchTab('control')">Manual Control</button>
                 <button class="tab" onclick="switchTab('status')">Status</button>
@@ -776,33 +885,34 @@ def render_dashboard(user_email, device_name, is_admin):
                 </div>
             </div>
 
-          
             <div id="tab-status" class="tab-content">
                 <section class="ota-section">
                     <div class="section-title">Device Status Information</div>
                     <button id="fetchStatusBtn" class="btn btn-primary" style="margin-bottom: 20px;">
-                    Fetch Latest Status
+                        Fetch Latest Status
                     </button>
-                       <div id="statusDisplay" style="background: white; border: 1px solid var(--border); border-radius: 8px; padding: 20px; min-height: 200px;">
-                       <p style="color: var(--text-mute); text-align: center;">Click "Fetch Latest Status" to retrieve device information</p>
+                    <div id="statusDisplay" style="background: white; border: 1px solid var(--border); border-radius: 8px; padding: 20px; min-height: 200px;">
+                        <p style="color: var(--text-mute); text-align: center;">Click "Fetch Latest Status" to retrieve device information</p>
                     </div>
                 </section>
             </div>
         </main>
-                    <!-- Firmware Update Section - Bottom of Dashboard -->
-            <div class="firmware-update-bottom">
-                <div class="sidebar-header">Firmware Update</div>
-                <div class="ota-section">
-                    <input type="file" id="firmwareFile" accept=".bin" class="file-input">
-                    <button id="uploadBtn" class="btn btn-primary" style="width: 100%; font-size: 0.875rem;" disabled>Upload</button>
-                    <div class="progress-bar">
-                        <div id="progressFill" class="progress-fill"></div>
-                    </div>
-                    <div id="otaStatus" class="ota-status"></div>
+
+        {camera_section}
+
+        <!-- Firmware Update Section - Bottom of Dashboard -->
+        <div class="firmware-update-bottom">
+            <div class="sidebar-header">Firmware Update</div>
+            <div class="ota-section">
+                <input type="file" id="firmwareFile" accept=".bin" class="file-input">
+                <button id="uploadBtn" class="btn btn-primary" style="width: 100%; font-size: 0.875rem;" disabled>Upload</button>
+                <div class="progress-bar">
+                    <div id="progressFill" class="progress-fill"></div>
                 </div>
+                <div id="otaStatus" class="ota-status"></div>
             </div>
         </div>
-
+    </div>
 
     <script>
         const USER_CONFIG = {user_config};
@@ -813,7 +923,9 @@ def render_dashboard(user_email, device_name, is_admin):
         const INITIAL_WAIT_TIMEOUT = 30000;
         const chunkSize = 4096;
 
-        const KNOWN_DEVICES = ['contact', 'shey','yatoohussain786','parveezshah1983','khandilawar1441'];
+        const KNOWN_DEVICES = ['contact', 'shey', 'yatoohussain786', 'parveezshah1983', 'khandilawar1441'];
+        const CAMERA_ENABLED_DEVICES = {json.dumps(CAMERA_ENABLED_DEVICES)};
+        const S3_BUCKET_URL = '{S3_BUCKET_URL}';
 
         const options = {{
             clean: true,
@@ -832,8 +944,9 @@ def render_dashboard(user_email, device_name, is_admin):
         let dashboardConnectTime = 0;
         let statusFetchTimeout = null;
         let initialDeviceWaitTimeout = null;
-
+        let cameraRefreshTimeout = null;
         let otaAckReceived = false;
+        let lastImageTimestamp = 0; // Track when we last loaded an image
 
         function logout() {{
             window.location.href = '{API_BASE_URL}/logout';
@@ -906,9 +1019,8 @@ def render_dashboard(user_email, device_name, is_admin):
                 let statusClass = 'indicator-unknown';
                 if (device.lastHeartbeat > 0) {{
                     statusClass = device.online ? 'indicator-online' : 'indicator-offline';
-                }}else if (device.online === false) {{
-                  // Device was marked offline after timeout
-                   statusClass = 'indicator-offline';
+                }} else if (device.online === false) {{
+                    statusClass = 'indicator-offline';
                 }}
                 indicator.className = 'device-indicator ' + statusClass;
 
@@ -932,49 +1044,55 @@ def render_dashboard(user_email, device_name, is_admin):
             updateDeviceList();
             updatePumpStatus();
             loadSchedules();
+            
+            // Auto-load camera image for newly selected device if camera section exists
+            if (document.getElementById('cameraDisplay')) {{
+                setTimeout(() => {{
+                    loadCameraImageFromS3(false);
+                }}, 500);
+            }}
         }}
 
         function updatePumpStatus() {{
-           const el = document.getElementById('pumpStatus');
-           const onBtn = document.getElementById('onBtn');
-           const offBtn = document.getElementById('offBtn');
+            const el = document.getElementById('pumpStatus');
+            const onBtn = document.getElementById('onBtn');
+            const offBtn = document.getElementById('offBtn');
 
-           if (devices[selectedDevice]) {{
-           const device = devices[selectedDevice];
+            if (devices[selectedDevice]) {{
+                const device = devices[selectedDevice];
         
-           // ✅ UPDATED: Check for offline state (either never connected or timed out)
-           if (!device.online && device.lastHeartbeat === 0) {{
-              // Device never connected
-              el.textContent = 'Device Offline';
-              el.className = 'pump-state state-off';
-              onBtn.disabled = true;
-              offBtn.disabled = true;
-           }} else if (!device.online && device.lastHeartbeat > 0) {{
-              // Device was online but went offline
-              el.textContent = 'Device Offline';
-              el.className = 'pump-state state-off';
-              onBtn.disabled = true;
-              offBtn.disabled = true;
-           }} else if (device.lastHeartbeat === 0) {{
-              // Still waiting for first heartbeat (within timeout period)
-              el.textContent = 'Waiting...';
-              el.className = 'pump-state state-off';
-              onBtn.disabled = true;
-              offBtn.disabled = true;
-           }} else {{
-              // Device is online
-              onBtn.disabled = false;
-              offBtn.disabled = false;
-              el.textContent = `Pump ${{device.pump_status ? 'ON' : 'OFF'}}`;
-              el.className = 'pump-state ' + (device.pump_status ? 'state-on' : 'state-off');
-           }}
-           }} else {{
-              el.textContent = 'No Device';
-              el.className = 'pump-state state-off';
-              onBtn.disabled = true;
-              offBtn.disabled = true;
-           }}
-           }}
+                if (!device.online && device.lastHeartbeat === 0) {{
+                    // Device never connected
+                    el.textContent = 'Device Offline';
+                    el.className = 'pump-state state-off';
+                    onBtn.disabled = true;
+                    offBtn.disabled = true;
+                }} else if (!device.online && device.lastHeartbeat > 0) {{
+                    // Device was online but went offline
+                    el.textContent = 'Device Offline';
+                    el.className = 'pump-state state-off';
+                    onBtn.disabled = true;
+                    offBtn.disabled = true;
+                }} else if (device.lastHeartbeat === 0) {{
+                    // Still waiting for first heartbeat
+                    el.textContent = 'Waiting...';
+                    el.className = 'pump-state state-off';
+                    onBtn.disabled = true;
+                    offBtn.disabled = true;
+                }} else {{
+                    // Device is online
+                    onBtn.disabled = false;
+                    offBtn.disabled = false;
+                    el.textContent = `Pump ${{device.pump_status ? 'ON' : 'OFF'}}`;
+                    el.className = 'pump-state ' + (device.pump_status ? 'state-on' : 'state-off');
+                }}
+            }} else {{
+                el.textContent = 'No Device';
+                el.className = 'pump-state state-off';
+                onBtn.disabled = true;
+                offBtn.disabled = true;
+            }}
+        }}
 
         function createSchedule() {{
             if (!client?.connected || !selectedDevice) {{
@@ -1084,7 +1202,7 @@ def render_dashboard(user_email, device_name, is_admin):
             }}).join('');
         }}
 
-                function requestDeviceStatus() {{
+        function requestDeviceStatus() {{
             if (!client?.connected || !selectedDevice) {{
                 alert('Not connected or no device selected');
                 return;
@@ -1153,51 +1271,152 @@ def render_dashboard(user_email, device_name, is_admin):
 
         function startInitialDeviceWaitTimeout() {{
             if (initialDeviceWaitTimeout) {{
-            clearTimeout(initialDeviceWaitTimeout);
-           }}
+                clearTimeout(initialDeviceWaitTimeout);
+            }}
     
-              initialDeviceWaitTimeout = setTimeout(() => {{
-              const deviceKey = USER_CONFIG.device.toLowerCase();
-              const device = devices[deviceKey];
+            initialDeviceWaitTimeout = setTimeout(() => {{
+                const deviceKey = USER_CONFIG.device.toLowerCase();
+                const device = devices[deviceKey];
         
-              // If device still has lastHeartbeat = 0 after timeout, mark as offline
-              if (device && device.lastHeartbeat === 0) {{
-              console.log('⏰ Initial wait timeout - device never connected:', deviceKey);
-              device.online = false;
-              updateDeviceList();
-              updatePumpStatus();
-              }}
-           }}, INITIAL_WAIT_TIMEOUT);
-       }}
-
-       function requestStatusFromAllDevices() {{
-          if (!client?.connected) return;
-    
-          console.log('📡 Requesting status from devices on load...');
-    
-          if (USER_CONFIG.isAdmin) {{
-          // Send status request to all known devices
-          KNOWN_DEVICES.forEach(deviceId => {{
-            client.publish(`${{prefix}}/${{deviceId}}/rx`, 'status', {{ qos: 1 }});
-            console.log(`📤 Status request sent to: ${{deviceId}}`);
-          }});
-        
-          // Set timeout to mark devices as offline if no response
-             setTimeout(() => {{
-             KNOWN_DEVICES.forEach(deviceId => {{
-                const device = devices[deviceId];
                 if (device && device.lastHeartbeat === 0) {{
-                    console.log(`❌ No status response from: ${{deviceId}} - marking offline`);
+                    console.log('⏰ Initial wait timeout - device never connected:', deviceKey);
                     device.online = false;
                     updateDeviceList();
+                    updatePumpStatus();
                 }}
-             }});
-             }}, 5000); // Wait 5 seconds for responses
-          }} else {{
-             // Send status request to user's device
-             client.publish(`${{prefix}}/${{USER_CONFIG.device}}/rx`, 'status', {{ qos: 1 }});
-             console.log(`📤 Status request sent to: ${{USER_CONFIG.device}}`);
-             }}
+            }}, INITIAL_WAIT_TIMEOUT);
+        }}
+
+        function requestStatusFromAllDevices() {{
+            if (!client?.connected) return;
+    
+            console.log('📡 Requesting status from devices on load...');
+    
+            if (USER_CONFIG.isAdmin) {{
+                KNOWN_DEVICES.forEach(deviceId => {{
+                    client.publish(`${{prefix}}/${{deviceId}}/rx`, 'status', {{ qos: 1 }});
+                    console.log(`📤 Status request sent to: ${{deviceId}}`);
+                }});
+        
+                setTimeout(() => {{
+                    KNOWN_DEVICES.forEach(deviceId => {{
+                        const device = devices[deviceId];
+                        if (device && device.lastHeartbeat === 0) {{
+                            console.log(`❌ No status response from: ${{deviceId}} - marking offline`);
+                            device.online = false;
+                            updateDeviceList();
+                        }}
+                    }});
+                }}, 5000);
+            }} else {{
+                client.publish(`${{prefix}}/${{USER_CONFIG.device}}/rx`, 'status', {{ qos: 1 }});
+                console.log(`📤 Status request sent to: ${{USER_CONFIG.device}}`);
+            }}
+        }}
+
+        function requestCameraImage() {{
+            if (!client?.connected || !selectedDevice) {{
+                alert('Not connected or no device selected');
+                return;
+            }}
+
+            // Check if selected device has camera capability
+            if (!CAMERA_ENABLED_DEVICES.map(d => d.toLowerCase()).includes(selectedDevice.toLowerCase())) {{
+                alert('This device does not have camera capability');
+                return;
+            }}
+            
+            console.log('📸 Requesting NEW camera image from device:', selectedDevice);
+            
+            const cameraDisplay = document.getElementById('cameraDisplay');
+            const refreshBtn = document.getElementById('refreshCameraBtn');
+            const timestampDiv = document.getElementById('imageTimestamp');
+            
+            if (!cameraDisplay) return; // Camera section not present
+            
+            cameraDisplay.innerHTML = '<div class="camera-loading">📸 Capturing new image from device (this may take 60-80 seconds)</div>';
+            timestampDiv.textContent = '';
+            refreshBtn.disabled = true;
+            
+            // Request new image from device
+            client.publish(`simcam/${{selectedDevice}}/do`, 'pic', {{ qos: 1 }});
+            console.log('✅ Camera capture command sent to device');
+            
+            // Wait 80 seconds for device to capture and upload new image
+            // This gives enough time for: capture (2-3s) + upload to S3 (60-70s) + buffer
+            if (cameraRefreshTimeout) clearTimeout(cameraRefreshTimeout);
+            cameraRefreshTimeout = setTimeout(() => {{
+                console.log('⏰ 80 second wait complete - loading new image from S3');
+                loadCameraImageFromS3(true);
+            }}, 80000);
+        }}
+
+        function loadCameraImageFromS3(isRefresh = false) {{
+            if (!selectedDevice) return;
+
+            const cameraDisplay = document.getElementById('cameraDisplay');
+            if (!cameraDisplay) return; // Camera section not present
+
+            if (!CAMERA_ENABLED_DEVICES.map(d => d.toLowerCase()).includes(selectedDevice.toLowerCase())) {{
+                console.log('Device does not have camera capability');
+                return;
+            }}
+            
+            const timestampDiv = document.getElementById('imageTimestamp');
+            const refreshBtn = document.getElementById('refreshCameraBtn');
+            
+            // Use timestamp to bust cache and get fresh image
+            const cacheBuster = Date.now();
+            const imageUrl = `${{S3_BUCKET_URL}}/${{selectedDevice}}/cam_latest.jpg?t=${{cacheBuster}}`;
+            console.log(`🖼️ Loading camera image from: ${{imageUrl}}`);
+            
+            // Show loading state if this is a refresh
+            if (isRefresh) {{
+                cameraDisplay.innerHTML = '<div class="camera-loading">Loading new image from S3</div>';
+            }}
+            
+            const img = new Image();
+            
+            img.onload = function() {{
+                console.log('✅ Camera image loaded successfully');
+                cameraDisplay.innerHTML = '';
+                cameraDisplay.appendChild(img);
+                
+                const now = new Date();
+                timestampDiv.textContent = `Last updated: ${{now.toLocaleString()}}`;
+                
+                lastImageTimestamp = cacheBuster;
+                refreshBtn.disabled = false;
+                
+                if (cameraRefreshTimeout) {{
+                    clearTimeout(cameraRefreshTimeout);
+                    cameraRefreshTimeout = null;
+                }}
+            }};
+            
+            img.onerror = function() {{
+                console.error('❌ Failed to load camera image from:', imageUrl);
+                cameraDisplay.innerHTML = `
+                    <div class="camera-error">
+                        <svg width="60" height="60" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="margin-bottom: 16px; opacity: 0.5;">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                        </svg>
+                        <div>⚠️ Unable to load camera image</div>
+                        <div style="font-size: 0.875rem; margin-top: 8px; color: var(--text-mute);">
+                            ${{isRefresh ? 'New image may not be ready yet. Please try again in a moment.' : 'Camera may be unavailable or no image captured yet'}}
+                        </div>
+                    </div>
+                `;
+                timestampDiv.textContent = '';
+                refreshBtn.disabled = false;
+                
+                if (cameraRefreshTimeout) {{
+                    clearTimeout(cameraRefreshTimeout);
+                    cameraRefreshTimeout = null;
+                }}
+            }};
+            
+            img.src = imageUrl;
         }}
 
         document.getElementById('onBtn').addEventListener('click', () => {{
@@ -1216,149 +1435,148 @@ def render_dashboard(user_email, device_name, is_admin):
             document.getElementById('uploadBtn').disabled = !e.target.files[0];
         }});
 
-document.getElementById('uploadBtn').addEventListener('click', async () => {{
-    const file = document.getElementById('firmwareFile').files[0];
-    if (!file || !selectedDevice) return;
+        document.getElementById('uploadBtn').addEventListener('click', async () => {{
+            const file = document.getElementById('firmwareFile').files[0];
+            if (!file || !selectedDevice) return;
 
-    const progressFill = document.getElementById('progressFill');
-    const otaStatus = document.getElementById('otaStatus');
-    const uploadBtn = document.getElementById('uploadBtn');
+            const progressFill = document.getElementById('progressFill');
+            const otaStatus = document.getElementById('otaStatus');
+            const uploadBtn = document.getElementById('uploadBtn');
 
-    uploadBtn.disabled = true;
-    otaStatus.className = 'ota-status waiting';
-    otaStatus.textContent = 'Starting upload...';
-    progressFill.style.width = '0%';
+            uploadBtn.disabled = true;
+            otaStatus.className = 'ota-status waiting';
+            otaStatus.textContent = 'Starting upload...';
+            progressFill.style.width = '0%';
 
-    // ✅ FIXED: Track completion state
-    let uploadComplete = false;
-    let completionMessageReceived = false;
+            let uploadComplete = false;
 
-    try {{
-        const uint8Array = new Uint8Array(await file.arrayBuffer());
-        const total = uint8Array.length;
-        let offset = 0;
+            try {{
+                const uint8Array = new Uint8Array(await file.arrayBuffer());
+                const total = uint8Array.length;
+                let offset = 0;
 
-        console.log('🚀 Starting OTA upload:', total, 'bytes to device:', selectedDevice);
+                console.log('🚀 Starting OTA upload:', total, 'bytes to device:', selectedDevice);
 
-        while (offset < total) {{
-            const chunk = uint8Array.slice(offset, offset + chunkSize);
-            const base64Chunk = btoa(String.fromCharCode.apply(null, chunk));
+                while (offset < total) {{
+                    const chunk = uint8Array.slice(offset, offset + chunkSize);
+                    const base64Chunk = btoa(String.fromCharCode.apply(null, chunk));
 
-            const isLastChunk = (offset + chunk.length >= total);
+                    const isLastChunk = (offset + chunk.length >= total);
 
-            const payload = JSON.stringify({{
-                method: "ota.upload",
-                params: {{ offset, total, chunk: base64Chunk }}
+                    const payload = JSON.stringify({{
+                        method: "ota.upload",
+                        params: {{ offset, total, chunk: base64Chunk }}
+                    }});
+
+                    console.log(`📤 Sending chunk at offset ${{offset}}/${{total}} (${{((offset/total)*100).toFixed(1)}}%)`);
+                    
+                    client.publish(`${{prefix}}/${{selectedDevice}}/rx`, payload, {{ qos: 1 }});
+
+                    if (isLastChunk) {{
+                        console.log('📦 Last chunk sent! Waiting for device to process and reboot...');
+                        progressFill.style.width = '99.5%';
+                        otaStatus.className = 'ota-status waiting';
+                        otaStatus.textContent = 'Finalizing upload... (99.5%)';
+                        
+                        await new Promise(r => setTimeout(r, 2000));
+                        
+                        uploadComplete = true;
+                        progressFill.style.width = '100%';
+                        otaStatus.className = 'ota-status success';
+                        otaStatus.textContent = '✅ Upload Complete! Device is rebooting...';
+                        
+                        break;
+                        
+                    }} else {{
+                        otaAckReceived = false;
+                        let ackWaitTime = 0;
+                        const maxWait = 10000;
+                        
+                        while (!otaAckReceived && ackWaitTime < maxWait) {{
+                            await new Promise(r => setTimeout(r, 100));
+                            ackWaitTime += 100;
+                        }}
+                        
+                        if (!otaAckReceived) {{
+                            throw new Error(`Timeout waiting for ACK at offset ${{offset}}`);
+                        }}
+                        
+                        console.log(`✅ ACK received for offset ${{offset}}`);
+                    }}
+
+                    offset += chunk.length;
+                    
+                    const progress = Math.min((offset / total) * 99, 99);
+                    progressFill.style.width = progress + '%';
+                    otaStatus.textContent = `Uploading: ${{progress.toFixed(1)}}% (${{offset}}/${{total}} bytes)`;
+                }}
+
+                if (uploadComplete) {{
+                    console.log('⏳ Waiting for device to reboot and reconnect...');
+                    otaStatus.textContent = '🔄 Device rebooting... waiting for reconnection...';
+                    
+                    if (devices[selectedDevice]) {{
+                        devices[selectedDevice].online = false;
+                        devices[selectedDevice].lastHeartbeat = 0;
+                        updateDeviceList();
+                        updatePumpStatus();
+                    }}
+                    
+                    let reconnectWaitTime = 0;
+                    const maxReconnectWait = 45000;
+                    let deviceReconnected = false;
+                    
+                    while (reconnectWaitTime < maxReconnectWait) {{
+                        await new Promise(r => setTimeout(r, 1000));
+                        reconnectWaitTime += 1000;
+                        
+                        const device = devices[selectedDevice];
+                        const secondsWaited = Math.floor(reconnectWaitTime / 1000);
+                        
+                        if (device && device.online && device.lastHeartbeat > 0) {{
+                            console.log('✅ Device reconnected!');
+                            deviceReconnected = true;
+                            otaStatus.className = 'ota-status success';
+                            otaStatus.textContent = '✅ Firmware Update Successful! Device reconnected.';
+                            
+                            setTimeout(() => {{
+                                console.log('📊 Requesting fresh status...');
+                                requestDeviceStatus();
+                            }}, 2000);
+                            
+                            break;
+                        }}
+                        
+                        otaStatus.textContent = `🔄 Waiting for device reconnection... (${{secondsWaited}}s / ${{Math.floor(maxReconnectWait/1000)}}s)`;
+                    }}
+                    
+                    if (!deviceReconnected) {{
+                        otaStatus.className = 'ota-status warning';
+                        otaStatus.textContent = '⚠️ Device did not reconnect within 45s. Please check device manually and refresh page.';
+                    }}
+                    
+                    uploadBtn.disabled = false;
+                }}
+
+            }} catch (error) {{
+                console.error('💥 OTA upload error:', error);
+                otaStatus.className = 'ota-status error';
+                otaStatus.textContent = '❌ Upload failed: ' + error.message;
+                uploadBtn.disabled = false;
+            }}
+        }});
+
+        document.getElementById('fetchStatusBtn').addEventListener('click', () => {{
+            requestDeviceStatus();
+        }});
+
+        // Add camera button listener if camera section exists
+        const refreshCameraBtn = document.getElementById('refreshCameraBtn');
+        if (refreshCameraBtn) {{
+            refreshCameraBtn.addEventListener('click', () => {{
+                requestCameraImage();
             }});
-
-            console.log(`📤 Sending chunk at offset ${{offset}}/${{total}} (${{((offset/total)*100).toFixed(1)}}%)`);
-            
-            client.publish(`${{prefix}}/${{selectedDevice}}/rx`, payload, {{ qos: 1 }});
-
-            if (isLastChunk) {{
-                // ✅ Last chunk sent
-                console.log('📦 Last chunk sent! Waiting for device to process and reboot...');
-                progressFill.style.width = '99.5%';
-                otaStatus.className = 'ota-status waiting';
-                otaStatus.textContent = 'Finalizing upload... (99.5%)';
-                
-                // ✅ Wait a bit for device to process
-                await new Promise(r => setTimeout(r, 2000));
-                
-                // ✅ Mark as complete (device will reboot)
-                uploadComplete = true;
-                progressFill.style.width = '100%';
-                otaStatus.className = 'ota-status success';
-                otaStatus.textContent = '✅ Upload Complete! Device is rebooting...';
-                
-                break; // Exit upload loop
-                
-            }} else {{
-                // ✅ Wait for ACK on non-final chunks
-                otaAckReceived = false;
-                let ackWaitTime = 0;
-                const maxWait = 10000;
-                
-                while (!otaAckReceived && ackWaitTime < maxWait) {{
-                    await new Promise(r => setTimeout(r, 100));
-                    ackWaitTime += 100;
-                }}
-                
-                if (!otaAckReceived) {{
-                    throw new Error(`Timeout waiting for ACK at offset ${{offset}}`);
-                }}
-                
-                console.log(`✅ ACK received for offset ${{offset}}`);
-            }}
-
-            offset += chunk.length;
-            
-            // Update progress (cap at 99% before last chunk)
-            const progress = Math.min((offset / total) * 99, 99);
-            progressFill.style.width = progress + '%';
-            otaStatus.textContent = `Uploading: ${{progress.toFixed(1)}}% (${{offset}}/${{total}} bytes)`;
         }}
-
-        // ✅ Upload complete, now wait for device reconnection
-        if (uploadComplete) {{
-            console.log('⏳ Waiting for device to reboot and reconnect...');
-            otaStatus.textContent = '🔄 Device rebooting... waiting for reconnection...';
-            
-            // Mark device as offline immediately
-            if (devices[selectedDevice]) {{
-                devices[selectedDevice].online = false;
-                devices[selectedDevice].lastHeartbeat = 0;
-                updateDeviceList();
-                updatePumpStatus();
-            }}
-            
-            // ✅ Wait for device to come back online
-            let reconnectWaitTime = 0;
-            const maxReconnectWait = 45000; // 45 seconds
-            let deviceReconnected = false;
-            
-            while (reconnectWaitTime < maxReconnectWait) {{
-                await new Promise(r => setTimeout(r, 1000));
-                reconnectWaitTime += 1000;
-                
-                const device = devices[selectedDevice];
-                const secondsWaited = Math.floor(reconnectWaitTime / 1000);
-                
-                // ✅ Check if device came back online
-                if (device && device.online && device.lastHeartbeat > 0) {{
-                    console.log('✅ Device reconnected!');
-                    deviceReconnected = true;
-                    otaStatus.className = 'ota-status success';
-                    otaStatus.textContent = '✅ Firmware Update Successful! Device reconnected.';
-                    
-                    // ✅ Request fresh status from device
-                    setTimeout(() => {{
-                        console.log('📊 Requesting fresh status...');
-                        requestDeviceStatus();
-                    }}, 2000);
-                    
-                    break;
-                }}
-                
-                // Update status message
-                otaStatus.textContent = `🔄 Waiting for device reconnection... (${{secondsWaited}}s / ${{Math.floor(maxReconnectWait/1000)}}s)`;
-            }}
-            
-            if (!deviceReconnected) {{
-                otaStatus.className = 'ota-status warning';
-                otaStatus.textContent = '⚠️ Device did not reconnect within 45s. Please check device manually and refresh page.';
-            }}
-            
-            uploadBtn.disabled = false;
-        }}
-
-    }} catch (error) {{
-        console.error('💥 OTA upload error:', error);
-        otaStatus.className = 'ota-status error';
-        otaStatus.textContent = '❌ Upload failed: ' + error.message;
-        uploadBtn.disabled = false;
-    }}
-}});
 
         function connect() {{
             client = mqtt.connect(brokerUrl, options);
@@ -1368,45 +1586,50 @@ document.getElementById('uploadBtn').addEventListener('click', async () => {{
                 indicator.className = 'connection-indicator connected';
 
                 if (USER_CONFIG.isAdmin) {{
-                // Pre-populate all known devices as offline initially
-                   KNOWN_DEVICES.forEach(deviceId => {{
-                   if (!devices[deviceId]) {{
-                       devices[deviceId] = {{ 
-                       pump_status: false, 
-                       lastHeartbeat: 0, 
-                       online: false 
-                     }};
-                    }}
-                   }});
+                    KNOWN_DEVICES.forEach(deviceId => {{
+                        if (!devices[deviceId]) {{
+                            devices[deviceId] = {{ 
+                                pump_status: false, 
+                                lastHeartbeat: 0, 
+                                online: false 
+                            }};
+                        }}
+                    }});
         
-                   client.subscribe(`${{prefix}}/+/status`);
-                   client.subscribe(`${{prefix}}/+/tx`);
+                    client.subscribe(`${{prefix}}/+/status`);
+                    client.subscribe(`${{prefix}}/+/tx`);
         
-                   // Request status from all devices after subscribing
-                   setTimeout(() => {{
-                      requestStatusFromAllDevices();
-                    }}, 500); // Small delay to ensure subscription is complete
+                    setTimeout(() => {{
+                        requestStatusFromAllDevices();
+                    }}, 500);
         
                 }} else {{
-                   client.subscribe(`${{prefix}}/${{USER_CONFIG.device}}/status`);
-                   client.subscribe(`${{prefix}}/${{USER_CONFIG.device}}/tx`);
-                   if (!devices[USER_CONFIG.device]) {{
-                       devices[USER_CONFIG.device] = {{ pump_status: false, lastHeartbeat: 0, online: false }};
-                   }}
-                   selectedDevice = USER_CONFIG.device;
+                    client.subscribe(`${{prefix}}/${{USER_CONFIG.device}}/status`);
+                    client.subscribe(`${{prefix}}/${{USER_CONFIG.device}}/tx`);
+                    if (!devices[USER_CONFIG.device]) {{
+                        devices[USER_CONFIG.device] = {{ pump_status: false, lastHeartbeat: 0, online: false }};
+                    }}
+                    selectedDevice = USER_CONFIG.device;
 
-                   // Request status from user's device
-                   setTimeout(() => {{
-                   requestStatusFromAllDevices();
-                   }}, 500);
+                    setTimeout(() => {{
+                        requestStatusFromAllDevices();
+                    }}, 500);
         
-                   startInitialDeviceWaitTimeout();
-                  }}
+                    startInitialDeviceWaitTimeout();
+                }}
 
-            dashboardConnectTime = Date.now();
-            updateDeviceList();
-            updatePumpStatus();
-            startTimeoutChecker();
+                dashboardConnectTime = Date.now();
+                updateDeviceList();
+                updatePumpStatus();
+                startTimeoutChecker();
+                
+                // Load camera image on initial dashboard load
+                if (document.getElementById('cameraDisplay') && selectedDevice) {{
+                    setTimeout(() => {{
+                        console.log('📷 Loading initial camera image on dashboard load');
+                        loadCameraImageFromS3(false);
+                    }}, 2000);
+                }}
             }});
 
             client.on('error', (err) => {{
@@ -1435,9 +1658,9 @@ document.getElementById('uploadBtn').addEventListener('click', async () => {{
                                 devices[id] = {{ pump_status: false, lastHeartbeat: 0, online: false }};
                             }}
                             if (devices[id].lastHeartbeat === 0 && initialDeviceWaitTimeout) {{
-                               console.log('✅ Device connected for first time, clearing initial timeout');
-                               clearTimeout(initialDeviceWaitTimeout);
-                               initialDeviceWaitTimeout = null;
+                                console.log('✅ Device connected for first time, clearing initial timeout');
+                                clearTimeout(initialDeviceWaitTimeout);
+                                initialDeviceWaitTimeout = null;
                             }}
                             devices[id].pump_status = !!data.params?.pump_status;
                             devices[id].lastHeartbeat = now;
@@ -1450,55 +1673,51 @@ document.getElementById('uploadBtn').addEventListener('click', async () => {{
                 }}
 
                 if (parts.length === 3 && parts[2] === 'tx') {{
-                const deviceId = parts[1].toLowerCase();
-                if (!isDeviceAllowed(deviceId)) return;
+                    const deviceId = parts[1].toLowerCase();
+                    if (!isDeviceAllowed(deviceId)) return;
                 
-                try {{
-                    const data = JSON.parse(message.toString());
+                    try {{
+                        const data = JSON.parse(message.toString());
                     
-                    if (data.method === 'status.response') {{
-                        console.log('📊 Status response:', data.params);
+                        if (data.method === 'status.response') {{
+                            console.log('📊 Status response:', data.params);
                         
-                        if (!devices[deviceId]) {{
-                            devices[deviceId] = {{ pump_status: false, lastHeartbeat: 0, online: false }};
+                            if (!devices[deviceId]) {{
+                                devices[deviceId] = {{ pump_status: false, lastHeartbeat: 0, online: false }};
+                            }}
+                        
+                            devices[deviceId].pump_status = data.params.pump_status === 'ON';
+                            devices[deviceId].firmware_version = data.params.firmware_version;
+                            devices[deviceId].pump_type = data.params.pump_type;
+                            devices[deviceId].imsi = data.params.imsi;
+                            devices[deviceId].uptime = data.params.uptime;
+                            devices[deviceId].lastHeartbeat = Date.now();
+                            devices[deviceId].online = true;
+                        
+                            displayStatusInfo(data.params);
+                        
+                            updateDeviceList();
+                            updatePumpStatus();
                         }}
-                        
-                        devices[deviceId].pump_status = data.params.pump_status === 'ON';
-                        devices[deviceId].firmware_version = data.params.firmware_version;
-                        devices[deviceId].pump_type = data.params.pump_type;
-                        devices[deviceId].imsi = data.params.imsi;
-                        devices[deviceId].uptime = data.params.uptime;
-                        devices[deviceId].lastHeartbeat = Date.now();
-                        devices[deviceId].online = true;
-                        
-                        displayStatusInfo(data.params);
-                        
-                        updateDeviceList();
-                        updatePumpStatus();
+                        else if (data.method === 'ota.ack') {{
+                            console.log('📦 OTA ACK received:', data.params);
+                            otaAckReceived = true;
+                        }}
+                        else if (data.method === 'ota.complete') {{
+                            console.log('✅ OTA Complete, device rebooting');
+                            const otaStatus = document.getElementById('otaStatus');
+                            otaStatus.className = 'ota-status success';
+                            otaStatus.textContent = 'Firmware update successful! Device is rebooting...';
+                        }}
+                        else if (data.result && data.result.schedules) {{
+                            schedules = data.result.schedules;
+                            renderSchedules();
+                        }}
+                    }} catch (e) {{
+                        console.error('Parse error:', e);
                     }}
-                    else if (data.method === 'ota.ack') {{
-                    console.log('📦 OTA ACK received:', data.params);
-                    otaAckReceived = true;
-                    }}
-                    else if (data.method === 'ota.complete') {{
-                    console.log('✅ OTA Complete, device rebooting');
-                    const otaStatus = document.getElementById('otaStatus');
-                    otaStatus.className = 'ota-status success';
-                    otaStatus.textContent = 'Firmware update successful! Device is rebooting...';
-                    }}
-                    else if (data.result && data.result.schedules) {{
-                        schedules = data.result.schedules;
-                        renderSchedules();
-                    }}
-                }} catch (e) {{
-                    console.error('Parse error:', e);
                 }}
-            }}
             }});
-                // Add button listener
-            document.getElementById('fetchStatusBtn').addEventListener('click', () => {{
-            requestDeviceStatus();
-        }});
         }}
 
         connect();

@@ -25,6 +25,10 @@
 #include <time.h>
 #include <sys/time.h>
 
+#include "camera_pin.h"
+#include "esp_camera.h"
+
+
 static bool s_ota_active = false;
 // static esp_ota_handle_t s_ota_handle = 0;
 
@@ -108,10 +112,54 @@ static pump_schedule_t s_schedules[MAX_SCHEDULES];
 static int s_schedule_count = 0;
 static esp_timer_handle_t s_scheduler_timer = NULL;
 
+// Camera configuration
+camera_config_t camera_config = {
+    .pin_pwdn = CAM_PIN_PWDN,
+    .pin_reset = CAM_PIN_RESET,
+    .pin_xclk = CAM_PIN_XCLK,
+    .pin_sscb_sda = CAM_PIN_SIOD,
+    .pin_sscb_scl = CAM_PIN_SIOC,
+
+    .pin_d7 = CAM_PIN_D7,
+    .pin_d6 = CAM_PIN_D6,
+    .pin_d5 = CAM_PIN_D5,
+    .pin_d4 = CAM_PIN_D4,
+    .pin_d3 = CAM_PIN_D3,
+    .pin_d2 = CAM_PIN_D2,
+    .pin_d1 = CAM_PIN_D1,
+    .pin_d0 = CAM_PIN_D0,
+    .pin_vsync = CAM_PIN_VSYNC,
+    .pin_href = CAM_PIN_HREF,
+    .pin_pclk = CAM_PIN_PCLK,
+
+    // XCLK at 16MHz for DMA stability (prevents EOF overflow)
+    .xclk_freq_hz = 16000000,
+    .ledc_timer = LEDC_TIMER_0,
+    .ledc_channel = LEDC_CHANNEL_0,
+
+    .pixel_format = PIXFORMAT_JPEG, // YUV422,GRAYSCALE,RGB565,JPEG
+    .frame_size =
+        FRAMESIZE_VGA, // QQVGA-UXGA Do not use sizes above QVGA when not JPEG
+
+    .jpeg_quality =
+        8,         // 0-63 lower=highest quality (8 = excellent quality, stable)
+    .fb_count = 2, // 2 frame buffers for stability
+    // .fb_location = CAMERA_FB_IN_DRAM,    // Frame buffers in PSRAM
+    .grab_mode = CAMERA_GRAB_WHEN_EMPTY, // Wait for buffer to be available
+    .sccb_i2c_port = 0                   // Use I2C port 0
+};
+
+
+static bool camera_initialized = false;
+
 
 static void scheduler_check_callback(void *arg);
 static void pump_turn_on(uint32_t duration_seconds);
 static void pump_turn_off_callback(void *arg);
+static void capture_and_send_photo(struct mg_connection *c);
+
+
+
 
 
 static char *make_topic_name(char *buf, size_t len, const char *suffix) {
@@ -644,6 +692,14 @@ void my_mqtt_on_connect(struct mg_connection *c, int code) {
   opts.qos = 1;
   opts.topic = mg_str(make_topic_name(topic, sizeof(topic), "rx"));
   mg_mqtt_sub(c, &opts);
+
+#if CONFIG_ENABLE_CAMERA
+  // ✅ Subscribe to simcam do topic (only if camera enabled)
+  mg_snprintf(topic, sizeof(topic), "simcam/%s/do", CONFIG_DEVICE_ID);
+  opts.topic = mg_str(topic);
+  mg_mqtt_sub(c, &opts);
+  ESP_LOGI(TAG_MQTT, "Subscribed to simcam do topic");
+#endif 
   publish_status(c);
   ESP_LOGI(TAG_MQTT, "Connected (code %d), subscribed to rx topic", code);
 }
@@ -665,6 +721,37 @@ void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_
   memcpy(preview, data.buf, preview_len);
   preview[preview_len] = '\0';
   ESP_LOGD(TAG_MQTT, "RX (%d bytes): %s%s", (int)data.len, preview, data.len > 200 ? "..." : "");
+
+#if CONFIG_ENABLE_CAMERA
+  // ✅ Check if this is simcam/do topic (camera commands)
+  char simcam_topic[100];
+  mg_snprintf(simcam_topic, sizeof(simcam_topic), "simcam/%s/do", CONFIG_DEVICE_ID);
+  
+  if (topic.len == strlen(simcam_topic) && 
+      strncmp(topic.buf, simcam_topic, topic.len) == 0) {
+    
+    // Handle camera commands on simcam topic
+    if (!is_rpc_method && data.len < 100) {
+      char small_buf[128];
+      int copy_len = (data.len < 100) ? data.len : 100;
+      memcpy(small_buf, data.buf, copy_len);
+      small_buf[copy_len] = '\0';
+      
+      for (int i = 0; i < copy_len; i++) {
+        small_buf[i] = tolower((unsigned char)small_buf[i]);
+      }
+      
+      if (strstr(small_buf, "pic") != NULL) {
+        ESP_LOGI(TAG_MQTT, "📸 Camera request received on simcam/do");
+        capture_and_send_photo(c);
+        return;
+      }
+    }
+    
+    ESP_LOGW(TAG_MQTT, "Unhandled simcam command");
+    return;
+  }
+#endif
 
   // ✅ Handle STATUS REQUEST
   if (!is_rpc_method && data.len < 100) {
@@ -723,6 +810,24 @@ void my_mqtt_on_message(struct mg_connection *c, struct mg_str topic, struct mg_
       mg_mqtt_pub(c, &pub_opts);
 
       ESP_LOGD(TAG_MQTT, "Status response sent");
+      return;
+    }
+  }
+
+    if (!is_rpc_method && data.len < 100) {
+    char small_buf[128];
+    int copy_len = (data.len < 100) ? data.len : 100;
+    memcpy(small_buf, data.buf, copy_len);
+    small_buf[copy_len] = '\0';
+    
+    // Convert to lowercase
+    for (int i = 0; i < copy_len; i++) {
+      small_buf[i] = tolower((unsigned char)small_buf[i]);
+    }
+    
+    if (strstr(small_buf, "pic") != NULL) {
+      ESP_LOGI(TAG_MQTT, "📸 Camera request received");
+      capture_and_send_photo(c);
       return;
     }
   }
@@ -907,6 +1012,181 @@ static void heartbeat_init(void) {
 }
 
 
+static esp_err_t init_camera(int framesize) {
+  // initialize the camera
+  camera_config.frame_size = framesize;
+  esp_err_t err = esp_camera_init(&camera_config);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Camera Init Failed");
+    return err;
+  }
+
+  // Optimize camera for distant objects in sunny conditions
+  sensor_t *s = esp_camera_sensor_get();
+  if (s != NULL) {
+    // White balance for sunny outdoor conditions
+    s->set_whitebal(s, 1);   // Enable AWB
+    s->set_awb_gain(s, 1);   // Enable AWB gain
+    s->set_wb_mode(s, 1);    // Sunny mode (1=sunny, better for outdoor)
+    s->set_saturation(s, 1); // Slightly increase saturation for clarity
+
+    // Excellent quality JPEG compression (balanced)
+    s->set_quality(s, 8); // Excellent quality, stable (8 = sweet spot)
+    // s->set_quality(s, 10); // Excellent quality, stable (8 = sweet spot)
+    // s->set_quality(s, 12); // Excellent quality, stable (8 = sweet spot)
+
+    // Sharpness and detail enhancement for distant objects
+    s->set_sharpness(s, 2); // Increase sharpness
+    s->set_denoise(s, 0);   // Disable denoise to preserve fine detail
+
+    // Exposure and gain for bright sunny conditions
+    s->set_aec_value(s, 400); // Lower exposure for bright light
+    s->set_aec2(s, 0);        // Disable night mode
+    s->set_ae_level(s, -1);   // Slightly underexpose to avoid overexposure
+    s->set_agc_gain(s, 0);    // Lower gain for bright conditions
+
+    // Lens and pixel corrections
+    s->set_lenc(s, 1);           // Enable lens correction
+    s->set_special_effect(s, 0); // No special effects
+    s->set_bpc(s, 1);            // Black pixel correction
+    s->set_wpc(s, 1);            // White pixel correction
+
+    // Contrast for better clarity of distant objects
+    s->set_contrast(s, 1); // Slightly increase contrast
+
+    ESP_LOGI(TAG, "Camera optimized: sunny/distant objects mode");
+    vTaskDelay(pdMS_TO_TICKS(500)); // Allow settings to stabilize
+    camera_initialized = true;
+  }
+
+  return ESP_OK;
+}
+
+// Simple base64 encoding (you'll need this for MQTT transmission)
+static const char base64_chars[] = 
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static char* base64_encode(const unsigned char *data, size_t input_length, size_t *output_length) {
+    *output_length = 4 * ((input_length + 2) / 3);
+    
+    char *encoded_data = malloc(*output_length + 1);
+    if (encoded_data == NULL) return NULL;
+
+    for (size_t i = 0, j = 0; i < input_length;) {
+        uint32_t octet_a = i < input_length ? data[i++] : 0;
+        uint32_t octet_b = i < input_length ? data[i++] : 0;
+        uint32_t octet_c = i < input_length ? data[i++] : 0;
+
+        uint32_t triple = (octet_a << 0x10) + (octet_b << 0x08) + octet_c;
+
+        encoded_data[j++] = base64_chars[(triple >> 3 * 6) & 0x3F];
+        encoded_data[j++] = base64_chars[(triple >> 2 * 6) & 0x3F];
+        encoded_data[j++] = base64_chars[(triple >> 1 * 6) & 0x3F];
+        encoded_data[j++] = base64_chars[(triple >> 0 * 6) & 0x3F];
+    }
+
+    for (size_t i = 0; i < (3 - input_length % 3) % 3; i++)
+        encoded_data[*output_length - 1 - i] = '=';
+
+    encoded_data[*output_length] = '\0';
+    return encoded_data;
+}
+
+static void capture_and_send_photo(struct mg_connection *c) {
+    ESP_LOGI(TAG, "📸 Camera photo requested");
+    
+    // Check if camera is initialized
+    if (!camera_initialized) {
+        ESP_LOGE(TAG, "Camera not initialized - cannot capture");
+        
+        // Send error response to simcam status topic
+        char response[256];
+        snprintf(response, sizeof(response),
+            "Camera not initialized");
+        
+        char status_topic[100];
+        struct mg_mqtt_opts pub_opts;
+        memset(&pub_opts, 0, sizeof(pub_opts));
+        mg_snprintf(status_topic, sizeof(status_topic), "simcam/%s/status", CONFIG_DEVICE_ID);
+        pub_opts.topic = mg_str(status_topic);
+        pub_opts.message = mg_str(response);
+        pub_opts.qos = 1;
+        mg_mqtt_pub(c, &pub_opts);
+        return;
+    }
+
+    // Flush old frames
+    ESP_LOGI(TAG, "Flushing camera buffer...");
+    camera_fb_t *flush_fb = NULL;
+    int flushed = 0;
+    do {
+        flush_fb = esp_camera_fb_get();
+        if (flush_fb) {
+            esp_camera_fb_return(flush_fb);
+            flushed++;
+        }
+    } while (flush_fb != NULL && flushed < 5);
+
+    vTaskDelay(pdMS_TO_TICKS(300));
+
+    // Capture fresh frame
+    ESP_LOGI(TAG, "Capturing image...");
+    camera_fb_t *fb = esp_camera_fb_get();
+    
+    if (!fb) {
+        ESP_LOGW(TAG, "First capture failed, retrying...");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        fb = esp_camera_fb_get();
+    }
+
+    if (fb) {
+        ESP_LOGI(TAG, "Captured image: %d bytes", fb->len);
+        
+        // Publish raw JPEG bytes directly to simcam topic (same as camera project)
+        char pub_topic[100];
+        struct mg_mqtt_opts pub_opts;
+        memset(&pub_opts, 0, sizeof(pub_opts));
+        
+        mg_snprintf(pub_topic, sizeof(pub_topic), "simcam/%s", CONFIG_DEVICE_ID);
+        pub_opts.topic = mg_str(pub_topic);
+        pub_opts.message = mg_str_n((char *)fb->buf, fb->len);
+        pub_opts.qos = 1;
+        mg_mqtt_pub(c, &pub_opts);
+        
+        ESP_LOGI(TAG, "Camera image sent via MQTT to %s", pub_topic);
+        
+        // Return frame buffer immediately after publishing
+        esp_camera_fb_return(fb);
+        fb = NULL;
+        
+        // Send success status
+        char status_msg[128];
+        snprintf(status_msg, sizeof(status_msg), "Photo success: MQTT=OK");
+        
+        char status_topic[100];
+        memset(&pub_opts, 0, sizeof(pub_opts));
+        mg_snprintf(status_topic, sizeof(status_topic), "simcam/%s/status", CONFIG_DEVICE_ID);
+        pub_opts.topic = mg_str(status_topic);
+        pub_opts.message = mg_str(status_msg);
+        pub_opts.qos = 1;
+        mg_mqtt_pub(c, &pub_opts);
+        
+    } else {
+        ESP_LOGE(TAG, "Camera capture failed");
+        
+        // Send failure status to simcam status topic
+        char status_topic[100];
+        struct mg_mqtt_opts pub_opts;
+        memset(&pub_opts, 0, sizeof(pub_opts));
+        mg_snprintf(status_topic, sizeof(status_topic), "simcam/%s/status", CONFIG_DEVICE_ID);
+        pub_opts.topic = mg_str(status_topic);
+        pub_opts.message = mg_str("Photo failed: Camera capture failed");
+        pub_opts.qos = 1;
+        mg_mqtt_pub(c, &pub_opts);
+    }
+}
+
+
 void app_main() {
 
   // esp_log_level_set("TAG_SCHED", ESP_LOG_DEBUG);
@@ -980,6 +1260,8 @@ void app_main() {
   }
 
 
+
+
   esp_task_wdt_config_t wdt_config = {
     .timeout_ms = 15000,  // 15 seconds
     .idle_core_mask = 0,
@@ -987,6 +1269,54 @@ void app_main() {
   };
   esp_task_wdt_init(&wdt_config);
   esp_task_wdt_add(NULL);
+
+#if CONFIG_ENABLE_CAMERA
+  
+  #if CONFIG_FRAMESIZE_240X240
+  int framesize = FRAMESIZE_240X240;
+#define FRAMESIZE_STRING "240x240"
+#elif CONFIG_FRAMESIZE_QVGA
+  int framesize = FRAMESIZE_QVGA;
+#define FRAMESIZE_STRING "320x240"
+#elif CONFIG_FRAMESIZE_HVGA
+  int framesize = FRAMESIZE_HVGA;
+#define FRAMESIZE_STRING "480x320"
+#elif CONFIG_FRAMESIZE_VGA
+  int framesize = FRAMESIZE_VGA;
+#define FRAMESIZE_STRING "640x480"
+#elif CONFIG_FRAMESIZE_SVGA
+  int framesize = FRAMESIZE_SVGA;
+#define FRAMESIZE_STRING "800x600"
+#elif CONFIG_FRAMESIZE_XGA
+  int framesize = FRAMESIZE_XGA;
+#define FRAMESIZE_STRING "1024x768"
+#elif CONFIG_FRAMESIZE_HD
+  int framesize = FRAMESIZE_HD;
+#define FRAMESIZE_STRING "1280x720"
+#elif CONFIG_FRAMESIZE_SXGA
+  int framesize = FRAMESIZE_SXGA;
+#define FRAMESIZE_STRING "1280x1024"
+#elif CONFIG_FRAMESIZE_UXGA
+  int framesize = FRAMESIZE_UXGA;
+#define FRAMESIZE_STRING "1600x1200"
+#elif CONFIG_FRAMESIZE_QXGA
+  int framesize = FRAMESIZE_QXGA;
+#define FRAMESIZE_STRING "2048x1536"
+#elif CONFIG_FRAMESIZE_QSXGA
+  int framesize = FRAMESIZE_QSXGA;
+#define FRAMESIZE_STRING "2560x1920"
+#elif CONFIG_FRAMESIZE_5MP
+  int framesize = FRAMESIZE_5MP;
+#define FRAMESIZE_STRING "2592x1944"
+#endif
+    ESP_LOGI(TAG, "Initializing camera...");
+    ret = init_camera(framesize);
+    if (ret != ESP_OK) {
+    while (1) {
+      vTaskDelay(1);
+    }
+  }
+#endif
 
   const esp_partition_t *ota_part = esp_ota_get_next_update_partition(NULL);
   //printf("OTA ready: %s (%lu KB)\n", ota_part->label, ota_part->size/1024);
@@ -1007,3 +1337,4 @@ void app_main() {
     vTaskDelay(pdMS_TO_TICKS(10));  // Yield CPU
   }
 }
+

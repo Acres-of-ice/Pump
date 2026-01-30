@@ -64,3 +64,55 @@ endchoice
             - mqtts://your-broker.com:8883 (TLS secured)
 
 endmenu
+
+menu "Camera Configuration"
+
+    config ENABLE_CAMERA
+        bool "Enable Camera Support"
+        default n
+        help
+            Enable camera hardware and MQTT camera commands.
+            Camera will subscribe to simcam/{sitename}/do for commands.
+        
+    choice FRAMESIZE
+        depends on ENABLE_CAMERA
+		bool "Camera Frame Size"
+		default FRAMESIZE_QSXGA
+		help
+			Select picture frame size for camera captures.
+
+		config FRAMESIZE_240X240
+			bool "240x240"
+		config FRAMESIZE_QVGA
+			bool "320x240 (QVGA)"
+		config FRAMESIZE_HVGA
+			bool "480x320 (HVGA)"
+		config FRAMESIZE_VGA
+			bool "640x480 (VGA)"
+		config FRAMESIZE_SVGA
+			bool "800x600 (SVGA)"
+		config FRAMESIZE_XGA
+			bool "1024x768 (XGA)"
+		config FRAMESIZE_HD
+			bool "1280x720 (HD)"
+		config FRAMESIZE_SXGA
+			bool "1280x1024 (SXGA)"
+		config FRAMESIZE_UXGA
+			bool "1600x1200 (UXGA)"
+		config FRAMESIZE_QXGA
+			bool "2048x1536 (QXGA)"
+		config FRAMESIZE_QSXGA
+			bool "2560x1920 (QSXGA)"
+		config FRAMESIZE_5MP
+			bool "2592x1944 (5MP)"
+	endchoice
+            
+    config PCB_TYPE_OCT
+        depends on ENABLE_CAMERA
+        bool "Use OCT (Octal SPIRAM) PCB"
+        default y
+        help
+            Enable for OCT (Octal SPIRAM) PCB variant.
+            OCT mode uses GPIO 33-37 for SPIRAM, requiring alternative camera pins.
+
+endmenu
